@@ -12,7 +12,12 @@ module.exports = async (req, res) => {
     if (req.method === 'GET') {
       const key = req.query.key;
       if (!key) return res.status(400).json({ error: 'key 파라미터가 필요합니다' });
-      const value = await kv.get(key);
+      var value = await kv.get(key);
+      // Upstash/@vercel/kv는 저장된 값이 JSON처럼 생기면 자동으로 객체로 풀어서 돌려주는데,
+      // 화면 쪽(window.storage 어댑터)은 항상 "문자열"을 기대하므로 여기서 다시 문자열로 맞춰줌.
+      if (value !== null && value !== undefined && typeof value !== 'string') {
+        value = JSON.stringify(value);
+      }
       return res.status(200).json({ value: value == null ? null : value });
     }
 
