@@ -1,0 +1,9 @@
+{
+  "name": "ev-charger-webapp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "한강서부사업단 EV 충전기 현황판 - 독립 웹앱(Vercel) 배포용",
+  "dependencies": {
+    "@vercel/kv": "^2.0.0"
+  }
+}

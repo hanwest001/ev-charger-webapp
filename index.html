@@ -1,0 +1,1958 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>한강서부사업단 EV 충전기 현황</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="app"></div>
+<script id="app-logic">
+(function(){
+"use strict";
+
+// ===== 독립 웹앱(Vercel) 전용 어댑터 =====
+// claude.ai 아티팩트 환경에서는 플랫폼이 window.storage를 자동으로 만들어주지만,
+// 독립된 웹앱(Vercel)에는 그런 게 없으므로 여기서 같은 모양(.get/.set, 반환값 {value:...})으로
+// 직접 만들어줍니다. 아래부터의 화면 코드는 v49 그대로이며 한 줄도 손대지 않았습니다 -
+// 저장 방식만 "Claude 내부 저장소" → "이 웹앱의 /api/state(서버) → Vercel KV(데이터베이스)"로
+// 바뀐 것뿐이라, 기존에 검증된 화면 동작(충전 시작/종료/예약 등)은 전혀 영향받지 않습니다.
+window.storage = {
+  get: function(key){
+    return fetch('/api/state?key=' + encodeURIComponent(key), { cache: 'no-store' })
+      .then(function(res){
+        if(!res.ok) throw new Error('불러오기 실패: HTTP ' + res.status);
+        return res.json();
+      })
+      .then(function(data){ return { value: (data && data.value != null) ? data.value : null }; });
+  },
+  set: function(key, value){
+    return fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ key: key, value: value })
+    }).then(function(res){
+      if(!res.ok) throw new Error('저장 실패: HTTP ' + res.status);
+      return true;
+    });
+  }
+};
+// ===== 어댑터 끝 =====
+
+var STORAGE_KEY = 'ev_charger_state';
+// 화면 하단에 표시되는 버전 표기 - 새 버전을 만들 때 이 값만 고치면 화면 전체(현황판/설정 화면)에 반영됩니다.
+var APP_VERSION_LABEL = 'v49-webapp (2026-09-11)';
+
+var DEFAULT_CHARGER_META = {
+  fast1:{name:'급속 충전기 1', type:'fast', power:'50kW급 · DC콤보'},
+  fast2:{name:'급속 충전기 2', type:'fast', power:'50kW급 · DC콤보'},
+  slow1:{name:'완속 충전기 1', type:'slow', power:'7kW급 · AC'}
+};
+var DEFAULT_CHARGER_ORDER = ['fast1','fast2','slow1'];
+
+// 관리자 비밀번호 - 전체 이용 기록 열람 / 엑셀 내보내기에 사용. 바꾸고 싶으면 이 값만 수정하면 됩니다.
+var ADMIN_PIN = '9312';
+
+// 업무용 차량보유현황(260810) 참고 - EV6 / 아이오닉5 전기차만 정리한 최초 기본값이에요.
+// 이후로는 화면의 "기본정보 설정" 메뉴(관리자 전용)에서 부 이름·차량 목록을 직접 관리합니다.
+// 이 기본값은 아직 설정을 한 번도 저장하지 않은 화면에서만 사용돼요.
+var DEFAULT_DEPTS = ['경영보상부','공사관리부','공사1부','공사2부','공사3부'];
+var DEFAULT_VEHICLES = [
+  {dept:'경영보상부', plate:'39호1109', model:'EV6 롱레인지'},
+  {dept:'경영보상부', plate:'39호6777', model:'EV6 롱레인지'},
+  {dept:'공사관리부', plate:'39하1546', model:'아이오닉5 롱레인지'},
+  {dept:'공사1부', plate:'52허0349', model:'아이오닉5 롱레인지'},
+  {dept:'공사1부', plate:'34하7801', model:'아이오닉5 롱레인지'},
+  {dept:'공사2부', plate:'24호3313', model:'아이오닉5 롱레인지'},
+  {dept:'공사2부', plate:'45호1199', model:'EV6 롱레인지'},
+  {dept:'공사3부', plate:'09하4459', model:'아이오닉5 롱레인지'},
+  {dept:'공사3부', plate:'15허0977', model:'아이오닉5 롱레인지'}
+];
+
+// 비상연락망(구내 전화번호) 명부 - 260721 기준. 관리자 화면에서 이름·구내번호를 추가/수정/삭제할 수
+// 있도록 state.staffRoster로 관리됩니다. 아래 배열은 처음 실행될 때 seed(기본값)로만 쓰입니다.
+// 표기 형식은 항상 '031-270-9' + 구내번호(3자리).
+var DEFAULT_STAFF_ROSTER = [
+  ["황병은","300","단"],["이재욱","310","경영보상부"],["김지웅","307","경영보상부"],["음정수","311","경영과"],["엄기범","312","경영과"],
+  ["박지연","314","경영과"],["안효권","319","경영과"],["최해명","320","경영과"],["정유진","315","보상1과"],["엄지훈","316","보상1과"],
+  ["박수연","317","보상1과"],["김용건","321","보상2과"],["양유진","322","보상2과"],["서푸름","318","보상2과"],["한성수","330","공사관리부"],
+  ["이동희","331","건설관리과"],["임준섭","332","건설관리과"],["정성욱","333","건설관리과"],["김성민","334","건설관리과"],["김영주","335","복선화과"],
+  ["윤준영","336","복선화과"],["성연우","337","복선화과"],["김종필","345","신뢰성제고과"],["이은아","346","신뢰성제고과"],["권민호","347","신뢰성제고과"],
+  ["양우성","370","공사1부"],["정경택","371","급수체계1과"],["최지원","372","급수체계1과"],["김진원","373","급수체계1과"],["구상선","361","급수체계2과"],
+  ["박성호","362","급수체계2과"],["이주아","363","급수체계2과"],["정지영","377","안정화1과"],["이은수","378","안정화1과"],["황태원","379","안정화1과"],
+  ["김인태","374","안정화2과"],["홍의성","375","안정화2과"],["이세민","376","안정화2과"],["유병진","380","공사2부"],["이상기","381","고도정수과"],
+  ["남정윤","383","고도정수과"],["최준기","383","고도정수과"],["이승훈","385","경기북부과"],["김윤경","386","경기북부과"],["최민석","387","경기북부과"],
+  ["신원준","388","건축시설과"],["하경수","384","건축시설과"],["양지민","389","건축시설과"],["김봉현","350","공사3부"],["박중익","303","공사3부"],
+  ["박진훈","306","공사3부"],["임상희","308","공사3부"],["한상조","351","기계설비과"],["이성진","352","기계설비과"],["박소정","353","기계설비과"],
+  ["박진성","354","기계설비과"],["노강일","355","전기설비과"],["추상천","356","전기설비과"],["이승현","357","전기설비과"],["박재현","360","전기설비과"],
+  ["구동규","358","계측설비과"],["박정은","359","계측설비과"]
+];
+function defaultStaffRoster(){
+  return DEFAULT_STAFF_ROSTER.map(function(r){ return {id:uid(), name:r[0], ext:r[1], dept:r[2]||''}; });
+}
+// 명부 원본 파일의 등장 순서(=부서 조직도 순서: 경영보상부→공사관리부→공사1부→공사2부→공사3부)를 "기본순서" 정렬 기준으로 사용한다.
+var STAFF_ORG_ORDER_INDEX = (function(){
+  var m = {}; DEFAULT_STAFF_ROSTER.forEach(function(r, i){ m[r[0]] = i; });
+  return m;
+})();
+function staffOrgSortValue(name){
+  var idx = STAFF_ORG_ORDER_INDEX[name];
+  return idx===undefined ? (100000) : idx; // 명부 원본에 없는(나중에 새로 추가한) 사람은 맨 뒤로
+}
+// 부 명칭도 항상 이 순서로 표시(경영보상부/공사관리부/공사1부/공사2부/공사3부), 이후 새로 추가한 부는 뒤에 붙는다.
+var DEPT_DISPLAY_ORDER = ['경영보상부','공사관리부','공사1부','공사2부','공사3부'];
+function deptSortValue(name){
+  var idx = DEPT_DISPLAY_ORDER.indexOf(name);
+  return idx===-1 ? 100000 : idx;
+}
+var DEFAULT_PHONE_FORMAT = {prefix:'031-270-9', digits:3};
+function formatExt(ext, format){
+  if(!ext) return '';
+  var f = format || DEFAULT_PHONE_FORMAT;
+  return (f.prefix!==undefined ? f.prefix : DEFAULT_PHONE_FORMAT.prefix) + ext;
+}
+function extPhone(ext){ return formatExt(ext, (state && state.staffPhoneFormat) || DEFAULT_PHONE_FORMAT); }
+function lookupExtInRoster(roster, name, format){
+  if(!name || !roster) return '';
+  var q = name.trim();
+  var hit = roster.filter(function(r){ return r.name===q; })[0];
+  return hit ? formatExt(hit.ext, format || DEFAULT_PHONE_FORMAT) : '';
+}
+function lookupExt(name){ return lookupExtInRoster(state && state.staffRoster, name, state && state.staffPhoneFormat); }
+function searchRoster(roster, query, limit){
+  var q = (query||'').trim();
+  if(!q || !roster) return [];
+  var starts = [], includes = [];
+  roster.forEach(function(r){
+    if(r.name===q) return; // 이미 완전히 일치하면 추천 목록에 또 보여줄 필요 없음
+    if(r.name.indexOf(q)===0) starts.push(r);
+    else if(r.name.indexOf(q)>-1) includes.push(r);
+  });
+  return starts.concat(includes).slice(0, limit||6);
+}
+function deptOptionsHtml(state, selected, includeBlank){
+  var depts = ((state && state.depts) || []).slice().sort(function(a,b){
+    var cmp = deptSortValue(a) - deptSortValue(b);
+    return cmp!==0 ? cmp : a.localeCompare(b,'ko',{numeric:true});
+  });
+  var blank = includeBlank===false ? '' : '<option value="">선택하세요</option>';
+  return blank + depts.map(function(d){
+    return '<option value="'+escapeHtml(d)+'"'+(d===selected?' selected':'')+'>'+escapeHtml(d)+'</option>';
+  }).join('');
+}
+function plateOptionsHtml(state, dept, selected){
+  if(!dept) return '<option value="">부를 먼저 선택하세요</option>';
+  var list = ((state && state.vehicles) || []).filter(function(v){ return v.dept===dept; });
+  if(!list.length) return '<option value="">등록된 차량이 없습니다</option>';
+  return '<option value="">선택하세요</option>' + list.map(function(v){
+    return '<option value="'+escapeHtml(v.plate)+'"'+(v.plate===selected?' selected':'')+'>'+escapeHtml(v.plate)+' · '+escapeHtml(v.model||'')+'</option>';
+  }).join('');
+}
+function syncPlateOptions(deptSelectId, plateSelectId){
+  var deptSel = document.getElementById(deptSelectId);
+  var plateSel = document.getElementById(plateSelectId);
+  if(!deptSel || !plateSel) return;
+  plateSel.innerHTML = plateOptionsHtml(state, deptSel.value, '');
+}
+
+var CSS_TEXT =":root{--bg:#F4F7FC;--surface:#FFFFFF;--surface-2:#EDF1F7;--surface-hover:#E4EAF3;--ink:#101826;--ink-muted:#5B6472;--ink-faint:#8A93A3;--border:#DCE3EC;--accent:#1868C7;--accent-ink:#FFFFFF;--idle:#178A5F;--idle-bg:#E3F6ED;--idle-border:#B7E6D0;--charging:#2F6FED;--charging-bg:#E9F1FF;--charging-border:#BBD4FF;--reserved:#B45F06;--reserved-bg:#FDF0DE;--reserved-border:#F2D4A0;--maint:#C22D2D;--maint-bg:#FCE7E7;--maint-border:#F3BCBC;--shadow:0 1px 2px rgba(16,24,38,.04),0 8px 24px -12px rgba(16,24,38,.12);--radius:14px;--font-sans:'Noto Sans KR','Malgun Gothic','Apple SD Gothic Neo',sans-serif;--font-mono:'IBM Plex Mono','D2Coding',ui-monospace,monospace;--brand-grad:linear-gradient(90deg,#FF9142 0%,#2F6FED 55%,#123E91 100%);--footer-bg:#101B30;--footer-ink:#AEBAD0;--footer-border:#25324A;--chip-icon-bg:#E7F0FD;--chip-icon-ink:#1868C7;--viz-cat-1:#2A78D6;--viz-cat-2:#EB6834;--viz-cat-3:#1BAF7A;}"
++"@media (prefers-color-scheme: dark){:root:not([data-theme='light']){--bg:#141F35;--surface:#1C2A44;--surface-2:#24334F;--surface-hover:#2C3C5C;--ink:#EDF1F7;--ink-muted:#A7B3C6;--ink-faint:#7C89A0;--border:#374867;--accent:#6BA6FF;--accent-ink:#0B1220;--idle:#4CD8A0;--idle-bg:#173424;--idle-border:#255A42;--charging:#82A9FF;--charging-bg:#213758;--charging-border:#38578C;--reserved:#F2B24C;--reserved-bg:#3A2A0E;--reserved-border:#5F441A;--maint:#F58585;--maint-bg:#3D1B1B;--maint-border:#672C2C;--shadow:0 1px 2px rgba(0,0,0,.25),0 12px 32px -16px rgba(0,0,0,.5);--brand-grad:linear-gradient(90deg,#FFA25E 0%,#5B9CFF 55%,#1F3D75 100%);--footer-bg:#101A2E;--footer-ink:#A7B3C6;--footer-border:#2A3A5A;--chip-icon-bg:#22304F;--chip-icon-ink:#82A9FF;--viz-cat-1:#4F9AEE;--viz-cat-2:#E0703A;--viz-cat-3:#2FAE81;}}"
++":root[data-theme='dark']{--bg:#0B1220;--surface:#121B2D;--surface-2:#182338;--surface-hover:#1E2A42;--ink:#E7ECF3;--ink-muted:#93A0B4;--ink-faint:#66738A;--border:#243252;--accent:#5B9CFF;--accent-ink:#0B1220;--idle:#4CD8A0;--idle-bg:#12291F;--idle-border:#1E4736;--charging:#75A0FF;--charging-bg:#182A4D;--charging-border:#2C4577;--reserved:#F2B24C;--reserved-bg:#302108;--reserved-border:#513510;--maint:#F58585;--maint-bg:#331414;--maint-border:#5A2323;--shadow:0 1px 2px rgba(0,0,0,.3),0 12px 32px -16px rgba(0,0,0,.6);--brand-grad:linear-gradient(90deg,#FFA25E 0%,#5B9CFF 55%,#1F3D75 100%);--footer-bg:#070B14;--footer-ink:#93A0B4;--footer-border:#1B2438;--chip-icon-bg:#16233D;--chip-icon-ink:#75A0FF;--viz-cat-1:#3987E5;--viz-cat-2:#D95926;--viz-cat-3:#199E70;}"
++"*{box-sizing:border-box;}html,body{margin:0;padding:0;}body{background:var(--bg);color:var(--ink);font-family:var(--font-sans);-webkit-font-smoothing:antialiased;line-height:1.5;}"
++"@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;}}"
++".wrap{max-width:1080px;margin:0 auto;padding:0 20px 64px;}"
++".topbar{position:sticky;top:0;z-index:20;background:var(--bg);padding:20px 20px 16px;border-bottom:3px solid transparent;border-image:var(--brand-grad) 1;}"
++".topbar-inner{max-width:1080px;margin:0 auto;display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;}"
++".brand-row{display:flex;align-items:center;gap:12px;}"
++".brand-logo{width:38px;height:38px;border-radius:11px;background:var(--brand-grad);display:flex;align-items:center;justify-content:center;flex:none;box-shadow:var(--shadow);}"
++".brand-logo svg{display:block;}"
++".brand-eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;color:var(--accent);text-transform:uppercase;}"
++"h1{font-size:22px;font-weight:900;margin:2px 0 0;letter-spacing:-.01em;text-wrap:balance;word-break:keep-all;}"
++".subtitle{font-size:13px;color:var(--ink-muted);margin-top:4px;}"
++".chips{display:flex;gap:8px;flex-wrap:wrap;}"
++".chip{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:10px 18px 10px 10px;box-shadow:var(--shadow);}"
++".chip-icon{width:38px;height:38px;border-radius:11px;background:var(--chip-icon-bg);color:var(--chip-icon-ink);display:flex;align-items:center;justify-content:center;flex:none;}"
++".chip-icon svg{width:19px;height:19px;}"
++".chip-text{display:flex;flex-direction:column;line-height:1.25;}"
++".chip b{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:19px;}.chip span{font-size:13.5px;color:var(--ink-muted);}"
++"@media (max-width:480px){"
++".chips{flex:1 1 100%;gap:5px;flex-wrap:nowrap;}"
++".chip{flex:1 1 0;min-width:0;gap:5px;padding:6px 7px 6px 6px;border-radius:11px;}"
++".chip-icon{width:22px;height:22px;border-radius:6px;}"
++".chip-icon svg{width:12px;height:12px;}"
++".chip-text{line-height:1.15;min-width:0;}"
++".chip b{font-size:12.5px;}"
++".chip span{font-size:8.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;}"
++"}"
++".sync-note{font-size:11.5px;color:var(--reserved);background:var(--reserved-bg);border:1px solid var(--reserved-border);border-radius:8px;padding:6px 10px;margin-top:10px;display:inline-block;}"
++".section-title{font-size:15px;font-weight:700;margin:36px 0 12px;display:flex;align-items:center;gap:8px;}.section-title .count{font-family:var(--font-mono);font-weight:500;color:var(--ink-muted);font-size:12px;}"
++".section-title-icon{width:18px;height:18px;border-radius:6px;background:var(--brand-grad);color:#fff;display:inline-flex;align-items:center;justify-content:center;flex:none;}.section-title-icon svg{display:block;}"
++".section-title-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin:36px 0 12px;}.section-title-row .section-title{margin:0;}"
++".bottom-actions{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;margin:40px 0 8px;padding-top:24px;border-top:1px solid var(--border);}"
++".icon-btn{gap:7px;}.icon-btn svg{display:block;flex:none;}"
++".cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:18px;}"
++".card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;}"
++".card-accent{height:4px;width:100%;}.card-accent.idle{background:var(--idle);}.card-accent.charging{background:var(--charging);}.card-accent.maintenance{background:var(--maint);}"
++".card-body{padding:18px 18px 16px;display:flex;flex-direction:column;gap:14px;flex:1;}"
++".card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}.card-head h3{font-size:17px;margin:0;font-weight:700;}"
++".power-badge{font-size:11px;color:var(--ink-muted);font-family:var(--font-mono);margin-top:2px;}"
++".status-pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:5px 11px;border-radius:999px;border:1px solid transparent;white-space:nowrap;}"
++".status-pill::before{content:'';width:7px;height:7px;border-radius:50%;background:currentColor;}"
++".status-pill.idle{color:var(--idle);background:var(--idle-bg);border-color:var(--idle-border);}"
++".status-pill.charging{color:var(--charging);background:var(--charging-bg);border-color:var(--charging-border);}"
++".status-pill.maintenance{color:var(--maint);background:var(--maint-bg);border-color:var(--maint-border);}"
++".idle-msg{font-size:13px;color:var(--ink-muted);background:var(--surface-2);border-radius:10px;padding:12px 14px;}"
++".session{background:var(--surface-2);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:10px;}"
++".session-row{display:flex;justify-content:space-between;font-size:13px;gap:10px;}.session-row .k{color:var(--ink-muted);}.session-row .v{font-weight:600;text-align:right;}"
++".mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums;}"
++".phone{font-family:var(--font-sans);font-weight:600;font-variant-numeric:tabular-nums;}"
++".progress-track{height:9px;border-radius:999px;background:var(--border);overflow:hidden;box-shadow:inset 0 1px 2px rgba(0,0,0,.12);}.progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),var(--charging));border-radius:999px;transition:width .4s ease;}"
++".mascot-progress{position:relative;margin:38px 0 6px;}"
++".mascot-car{position:absolute;bottom:-2px;transform:translateX(-50%);width:44px;height:30px;transition:left .6s ease;pointer-events:none;z-index:2;}"
++".mascot-car img{display:block;width:100%;height:100%;object-fit:contain;filter:drop-shadow(0 2px 3px rgba(0,0,0,.22));}"
++"@keyframes wheelSpin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}"
++".remain{font-size:12px;color:var(--ink-muted);display:flex;justify-content:space-between;}.remain.overdue{color:var(--maint);font-weight:600;}"
++".maint-note{font-size:13px;background:var(--maint-bg);color:var(--maint);border-radius:10px;padding:12px 14px;border:1px solid var(--maint-border);}"
++".btn-row{display:flex;gap:8px;flex-wrap:wrap;}"
++".btn{appearance:none;border:1px solid var(--border);background:var(--surface);color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;padding:9px 16px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;}"
++".btn:hover{background:var(--surface-hover);}.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px;}"
++".btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;}.btn.primary:hover{filter:brightness(1.08);}"
++".btn.ghost{background:transparent;border-color:transparent;color:var(--ink-muted);padding:9px 4px;}.btn.ghost:hover{color:var(--ink);background:transparent;text-decoration:underline;}"
++".btn.small{padding:6px 12px;font-size:12px;border-radius:999px;}.btn:disabled{opacity:.5;cursor:not-allowed;}"
++".queue{border-top:1px dashed var(--border);padding-top:12px;display:flex;flex-direction:column;gap:8px;}"
++".queue-title{font-size:12px;font-weight:700;color:var(--ink-muted);text-transform:uppercase;letter-spacing:.04em;display:flex;justify-content:space-between;align-items:center;}"
++".queue-item{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;font-size:12.5px;background:var(--reserved-bg);border:1px solid var(--reserved-border);color:var(--reserved);border-radius:8px;padding:8px 10px;}"
++".queue-item .who{font-weight:600;}.queue-item .when{font-family:var(--font-mono);font-variant-numeric:tabular-nums;opacity:.85;}"
++".queue-actions{display:flex;gap:6px;flex-wrap:wrap;margin-left:auto;}.queue-actions .btn{white-space:nowrap;}"
++".queue-empty{font-size:12.5px;color:var(--ink-faint);}"
++".history-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:6px 18px;max-height:340px;overflow-y:auto;}"
++".history-row{display:flex;gap:12px;align-items:baseline;padding:11px 0;border-bottom:1px solid var(--border);font-size:13px;}.history-row:last-child{border-bottom:none;}"
++".history-time{font-family:var(--font-mono);font-variant-numeric:tabular-nums;color:var(--ink-faint);flex:0 0 88px;}"
++".history-charger{flex:0 0 84px;color:var(--ink-muted);font-weight:600;}.history-desc{flex:1;color:var(--ink);}"
++".empty-note{color:var(--ink-faint);font-size:13px;padding:16px 0;}"
++".footer-bar{margin-top:44px;background:var(--footer-bg);border-top:1px solid var(--footer-border);}"
++".footer-bar-inner{max-width:1080px;margin:0 auto;padding:18px 20px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:11.5px;color:var(--footer-ink);}"
++".stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:18px;}"
++".stats-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:16px 18px 14px;}"
++".stats-card h4{margin:0 0 2px;font-size:13.5px;font-weight:700;}"
++".stats-sub{font-size:11.5px;color:var(--ink-muted);margin-bottom:12px;}"
++".stats-empty{font-size:12.5px;color:var(--ink-faint);padding:30px 0;text-align:center;}"
++".bar-chart{display:block;width:100%;height:auto;overflow:visible;}"
++".bar-chart .axis-line{stroke:var(--border);stroke-width:1;}"
++".bar-chart .bar-label{font-family:var(--font-mono);font-size:9px;fill:var(--ink-faint);}"
++".bar-chart .value-label{font-family:var(--font-mono);font-size:9.5px;font-weight:700;fill:var(--ink);}"
++".field-hint{font-size:11.5px;color:var(--ink-faint);margin:-8px 0 12px;}"
++"#startNameExt,#reserveNameExt{display:inline-block;margin:6px 0 0;font-size:12px;font-weight:600;color:var(--accent);font-family:var(--font-sans);}"
++"#startNameExt:empty,#reserveNameExt:empty{display:none;}"
++".name-input-wrap{position:relative;}"
++".name-suggest{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 28px -12px rgba(0,0,0,.35);max-height:220px;overflow-y:auto;z-index:20;}"
++".name-suggest[hidden]{display:none;}"
++".name-suggest button{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;padding:10px 12px;border:none;background:none;text-align:left;font-size:14px;color:var(--ink);cursor:pointer;font-family:var(--font-sans);}"
++".name-suggest button:hover,.name-suggest button:active,.name-suggest button.active{background:var(--surface-2);}"
++".name-suggest button .sug-ext{font-size:12px;color:var(--ink-muted);flex-shrink:0;}"
++".name-suggest button+button{border-top:1px solid var(--border);}"
++"dialog{border:none;border-radius:16px;padding:0;width:min(420px,92vw);background:var(--surface);color:var(--ink);box-shadow:0 24px 60px -20px rgba(0,0,0,.4);font-family:var(--font-sans);}"
++"dialog::backdrop{background:rgba(10,14,24,.5);}"
++".modal-inner{padding:22px 22px 18px;}.modal-inner h4{margin:0 0 4px;font-size:16px;}.modal-sub{font-size:12.5px;color:var(--ink-muted);margin-bottom:16px;}"
++".field{display:flex;flex-direction:column;gap:5px;margin-bottom:12px;}.field label{font-size:12.5px;font-weight:600;color:var(--ink-muted);}"
++".field input,.field select,.field textarea{font-family:inherit;font-size:14px;padding:9px 11px;border-radius:8px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);width:100%;}"
++".field input:focus,.field select:focus,.field textarea:focus{outline:2px solid var(--accent);outline-offset:1px;}"
++".field[hidden]{display:none;}"
++".field-row{display:flex;gap:10px;}.field-row .field{flex:1;}.field-error{font-size:12px;color:var(--maint);min-height:14px;}"
++".modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}"
++".toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);opacity:0;background:var(--ink);color:var(--bg);font-size:13px;padding:11px 18px;border-radius:10px;box-shadow:var(--shadow);transition:opacity .25s ease,transform .25s ease;pointer-events:none;z-index:50;max-width:88vw;text-align:center;}"
++".toast.show{opacity:1;transform:translateX(-50%) translateY(0);}"
+/* v48: 배지를 화면 하단 고정(position:fixed)에서 헤더 바로 아래 본문 흐름 안으로 옮김.
+   이유: 휴대폰 브라우저는 하단에 자체 주소창/도구 막대가 겹치는 경우가 많아, 화면
+   맨 아래 고정된 배지가 사용자 눈에 안 보였을 가능성이 있음(v47에서 배지가 떴는데도
+   못 봤다는 보고가 있었음). 헤더 바로 아래로 옮기면 스크롤 없이 항상 보이고, 평소에는
+   "정상" 문구만 조용히 표시되다가 문제가 생기면 색이 바뀌어 눈에 띔. */
++".sync-status{max-width:1080px;margin:10px auto 0;padding:0 20px;font-size:11.5px;line-height:1.5;color:var(--ink-faint);}"
++".sync-status.warn{background:#fff4ea;border:1px solid #f0ad5c;color:#7a4a12;border-radius:10px;padding:9px 14px;margin:14px auto 0;font-size:12.5px;}"
++"@media (prefers-color-scheme: dark){.sync-status.warn{background:#3a2a12;border-color:#8a5a1f;color:#ffcf8a;}}"
++":root[data-theme='dark'] .sync-status.warn{background:#3a2a12;border-color:#8a5a1f;color:#ffcf8a;}"
++".diag-log-link{background:none;border:none;padding:0;margin:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit;font-size:11.5px;}"
++".diag-log-list{max-height:52vh;overflow-y:auto;border:1px solid var(--border);border-radius:8px;font-size:12px;}"
++".diag-log-row{display:flex;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);}"
++".diag-log-row:last-child{border-bottom:none;}"
++".diag-log-time{color:var(--ink-faint);flex:none;white-space:nowrap;}"
++".diag-log-type{color:var(--ink);flex:none;font-weight:600;white-space:nowrap;}"
++".diag-log-detail{color:var(--ink-muted);word-break:break-all;}"
++".readonly-banner{background:var(--reserved-bg);color:var(--reserved);border:1px solid var(--reserved-border);border-radius:10px;padding:10px 14px;font-size:12.5px;margin:16px 0;}"
++".settings-back{margin-bottom:14px;}"
++".settings-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:6px 18px;margin-bottom:8px;}"
++".settings-row{display:flex;align-items:center;gap:8px;padding:10px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;}"
++".settings-row:last-child{border-bottom:none;}"
++".settings-row input,.settings-row select{font-family:inherit;font-size:13px;padding:7px 9px;border-radius:7px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);}"
++".settings-row .v-dept{min-width:110px;}"
++".settings-row .v-plate{width:120px;}"
++".settings-row .s-dept{width:100px;}"
++".settings-row .s-name{width:100px;}"
++".settings-row .s-ext{width:90px;font-family:var(--font-mono);}"
++".settings-row-preview{font-size:12.5px;color:var(--ink-muted);min-width:120px;}"
++".settings-row .v-model{flex:1;min-width:140px;}.settings-row .c-name{flex:1;min-width:140px;}.settings-row .c-type{min-width:90px;}.settings-row .c-power{flex:1;min-width:160px;}"
++".settings-add-row{display:flex;gap:8px;flex-wrap:wrap;padding-top:14px;margin-top:6px;border-top:1px dashed var(--border);}"
++".settings-add-row select,.settings-add-row input{font-family:inherit;font-size:13px;padding:7px 9px;border-radius:7px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink);}"
++".settings-hint{font-size:11.5px;color:var(--ink-faint);margin:-2px 0 14px;}"
++".bulk-bar{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;}"
++".sort-bar{display:flex;align-items:center;gap:4px;flex:none;}"
++".sort-bar select{font-family:inherit;font-size:10.5px;padding:3px 5px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink-muted);max-width:88px;}"
++".sort-bar .sort-dir-btn{width:20px;height:20px;border-radius:6px;border:1px solid var(--border);background:var(--surface-2);color:var(--ink-muted);font-size:10px;line-height:1;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}"
++".sort-bar .sort-dir-btn:hover{background:var(--surface-hover);color:var(--ink);}"
++".panel-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;}"
++".panel-toolbar .settings-hint{flex:1;margin:0 0 14px;}"
++".settings-tabs{display:flex;gap:2px;margin:20px 0 16px;border-bottom:1px solid var(--border);overflow-x:auto;}"
++".settings-tabs .tab-btn{padding:10px 14px;border:none;background:none;font-family:inherit;font-size:13.5px;font-weight:700;color:var(--ink-muted);cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;}"
++".settings-tabs .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);}"
++".tab-count{display:inline-block;margin-left:6px;font-family:var(--font-mono);font-size:11px;font-weight:600;color:var(--ink-muted);background:var(--surface-2);border-radius:999px;padding:1px 7px;vertical-align:middle;}"
++".tab-btn.active .tab-count{color:var(--accent);background:var(--surface);}"
++".settings-tabs .tab-btn:hover{color:var(--ink);}"
++".settings-panel[hidden]{display:none;}"
++".settings-subtabs{display:flex;gap:6px;margin-bottom:12px;}"
++".settings-subtabs .subtab-btn{padding:6px 12px;border-radius:999px;border:1px solid var(--border);background:var(--surface);font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink-muted);cursor:pointer;}"
++".settings-subtabs .subtab-btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);}"
++".settings-subpanel[hidden]{display:none;}"
++".dept-chips{display:flex;flex-wrap:wrap;gap:8px;}"
++".dept-chip{display:flex;align-items:center;gap:2px;background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 4px 4px 12px;box-shadow:var(--shadow);}"
++".dept-chip input{border:none;background:transparent;width:88px;font-size:13px;padding:4px 2px;color:var(--ink);font-family:inherit;}"
++".dept-chip input:focus{outline:none;}"
++".dept-chip .chip-btn{width:24px;height:24px;border-radius:50%;border:none;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--ink-faint);flex:none;}"
++".dept-chip .chip-btn:hover{background:var(--surface-hover);color:var(--ink);}"
++".dept-chip-add{background:var(--surface-2);border-style:dashed;}"
++".dept-chip-add input{width:110px;}";
+
+var CHROME_HTML = ''
++ '<div class="toast" id="toast"></div>'
++ '<dialog id="diagDialog"><div class="modal-inner">'
++ '<h4>진단 로그</h4><div class="modal-sub">이 기기의 브라우저에만 저장되는 기록이에요(다른 사람 화면에는 안 보임). 문제가 생겼을 때 이 화면을 캡처해서 알려주시면 원인 파악에 큰 도움이 됩니다.</div>'
++ '<div id="diagLogBody"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="diagDialog">닫기</button><button type="button" class="btn primary" data-action="copy-diag-log">전체 복사</button></div>'
++ '</div></dialog>'
++ '<dialog id="startDialog"><form class="modal-inner" id="startForm" novalidate>'
++ '<h4>충전 시작</h4><div class="modal-sub">사용자 정보를 입력해 주세요.</div>'
++ '<div class="field"><label for="startName">이름 *</label><div class="name-input-wrap"><input id="startName" name="name" maxlength="20" autocomplete="off"><div class="name-suggest" id="startNameSuggest" hidden></div></div><span class="field-hint" id="startNameExt"></span></div>'
++ '<div class="field-row"><div class="field"><label for="startDept">부 *</label><select id="startDept" name="dept"><option value="">선택하세요</option></select></div>'
++ '<div class="field"><label for="startPlate">차량번호 *</label><select id="startPlate" name="plate"><option value="">부를 먼저 선택하세요</option></select></div></div>'
++ '<div class="field-hint">최근에 입력했던 부·차량번호를 기억해서 자동으로 채워드려요.</div>'
++ '<div class="field"><label for="startMinutes">예상 충전 시간</label><select id="startMinutes" name="minutes"></select></div>'
++ '<div class="field" id="startMinutesCustomWrap" hidden><label for="startMinutesCustom">직접 입력 (분 단위)</label><input id="startMinutesCustom" name="minutesCustom" type="number" min="5" step="5" placeholder="예: 45"></div>'
++ '<div class="field-error" id="startError"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="startDialog">취소</button><button type="button" class="btn primary" data-action="submit-form" data-form="startForm">충전 시작</button></div>'
++ '</form></dialog>'
++ '<dialog id="reserveDialog"><form class="modal-inner" id="reserveForm" novalidate>'
++ '<h4>예약하기</h4><div class="modal-sub">오늘 하루 기준으로 예약할 수 있어요.</div>'
++ '<div class="field"><label for="reserveName">이름 *</label><div class="name-input-wrap"><input id="reserveName" name="name" maxlength="20" autocomplete="off"><div class="name-suggest" id="reserveNameSuggest" hidden></div></div><span class="field-hint" id="reserveNameExt"></span></div>'
++ '<div class="field-row"><div class="field"><label for="reserveDept">부 *</label><select id="reserveDept" name="dept"><option value="">선택하세요</option></select></div>'
++ '<div class="field"><label for="reservePlate">차량번호 *</label><select id="reservePlate" name="plate"><option value="">부를 먼저 선택하세요</option></select></div></div>'
++ '<div class="field-hint">최근에 입력했던 부·차량번호를 기억해서 자동으로 채워드려요.</div>'
++ '<div class="field-row"><div class="field"><label for="reserveTime">시작 시각 *</label><input id="reserveTime" name="time" type="time"></div>'
++ '<div class="field"><label for="reserveMinutes">예약 시간</label><select id="reserveMinutes" name="minutes"><option value="30">30분</option><option value="60" selected>1시간</option><option value="90">1시간 30분</option><option value="120">2시간</option></select></div></div>'
++ '<div class="field-hint" id="reserveTimeHint"></div>'
++ '<div class="field-error" id="reserveError"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="reserveDialog">취소</button><button type="button" class="btn primary" data-action="submit-form" data-form="reserveForm">예약하기</button></div>'
++ '</form></dialog>'
++ '<dialog id="maintDialog"><form class="modal-inner" id="maintForm" novalidate>'
++ '<h4>점검중으로 표시</h4><div class="modal-sub">고장·정기점검 등으로 사용할 수 없는 상태로 바꿉니다.</div>'
++ '<div class="field"><label for="maintNote">메모 (선택)</label><textarea id="maintNote" name="note" rows="3" placeholder="예: 커넥터 파손, AS 접수함"></textarea></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="maintDialog">취소</button><button type="button" class="btn primary" data-action="submit-form" data-form="maintForm">점검중으로 표시</button></div>'
++ '</form></dialog>'
++ '<dialog id="overlapDialog"><div class="modal-inner">'
++ '<h4>⚠ 예약된 시간과 겹쳐요</h4><div class="modal-sub" id="overlapMsg"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="overlapDialog">취소하고 시간 조정</button><button type="button" class="btn primary" data-action="confirm-overlap-start">그래도 시작</button></div>'
++ '</div></dialog>'
++ '<dialog id="adminDialog"><form class="modal-inner" id="adminForm" novalidate>'
++ '<h4>관리자 로그인</h4><div class="modal-sub">전체 이용 기록 열람과 엑셀 내보내기는 관리자만 할 수 있어요.</div>'
++ '<div class="field"><label for="adminPin">비밀번호</label><input id="adminPin" name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="20"></div>'
++ '<div class="field-error" id="adminError"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="adminDialog">취소</button><button type="button" class="btn primary" data-action="submit-form" data-form="adminForm">확인</button></div>'
++ '</form></dialog>'
++ '<dialog id="bulkImportDialog"><div class="modal-inner">'
++ '<h4>엑셀 업로드</h4><div class="modal-sub" id="bulkImportMsg" style="white-space:pre-line;"></div>'
++ '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="bulkImportDialog">취소</button><button type="button" class="btn primary" id="bulkImportConfirmBtn" data-action="confirm-bulk-import">교체 진행</button></div>'
++ '</div></dialog>';
+
+function escapeHtml(str){
+  return String(str==null?'':str).replace(/[&<>"']/g, function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+function cloneState(s){ return JSON.parse(JSON.stringify(s)); }
+function uid(){ return Math.random().toString(36).slice(2,10); }
+function nowISO(){ return new Date().toISOString(); }
+function fmtClock(iso){ return new Date(iso).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
+function fmtMinutes(m){ if(m<60) return m+'분'; if(m%60===0) return (m/60)+'시간'; return Math.floor(m/60)+'시간 '+(m%60)+'분'; }
+var FAST_MINUTES_PRESET = [30,60,90,120,180,240];
+var SLOW_MINUTES_PRESET = [30,60,90,120,180,240,300,360,420,480,540,600];
+function minutesOptionsHtml(type, selected){
+  var opts = (type==='slow') ? SLOW_MINUTES_PRESET : FAST_MINUTES_PRESET;
+  var html = '<option value="custom"'+(selected==='custom'?' selected':'')+'>직접 입력...</option>';
+  html += opts.map(function(m){ return '<option value="'+m+'"'+(m===selected?' selected':'')+'>'+fmtMinutes(m)+'</option>'; }).join('');
+  return html;
+}
+function chargerMaxMinutes(chargerId){
+  var meta = state && state.chargerMeta ? state.chargerMeta[chargerId] : null;
+  return (meta && meta.type==='slow') ? 600 : 240;
+}
+function toggleStartMinutesCustom(){
+  var sel = document.getElementById('startMinutes'); var wrap = document.getElementById('startMinutesCustomWrap');
+  if(!sel || !wrap) return;
+  wrap.hidden = (sel.value !== 'custom');
+}
+function statusLabel(st){ return st==='idle'?'비어있음':(st==='charging'?'충전중':'점검중'); }
+
+var ACTION_LABEL = {start:'충전 시작', end:'충전 종료', reserve:'예약', cancel_reserve:'예약 취소', maintenance_on:'점검 시작', maintenance_off:'점검 해제'};
+
+function pushHistory(state, chargerId, action, fields, text){
+  var meta = (state.chargerMeta||{})[chargerId];
+  fields = fields || {};
+  state.history.unshift({
+    id:uid(), time:nowISO(), chargerId:chargerId, chargerName: meta?meta.name:'',
+    action:action, name:fields.name||'', dept:fields.dept||'', plate:fields.plate||'', text:text
+  });
+  if(state.history.length>500) state.history.length = 500;
+}
+
+function findQueueConflict(chargerId, minutes){
+  var c = state.chargers[chargerId];
+  if(!c || !c.queue || !c.queue.length) return null;
+  var end = new Date(Date.now()+minutes*60000);
+  var conflict = null;
+  c.queue.forEach(function(q){
+    var from = new Date(q.from);
+    if(from < end && (!conflict || from < new Date(conflict.from))) conflict = q;
+  });
+  return conflict;
+}
+function doStart(state, chargerId, data){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  var start = nowISO(); var end = new Date(Date.now()+data.minutes*60000).toISOString();
+  c.status='charging'; c.current={name:data.name, dept:data.dept||'', plate:data.plate, ext:lookupExtInRoster(s.staffRoster, data.name, s.staffPhoneFormat), startedAt:start, expectedEnd:end, minutes:data.minutes};
+  pushHistory(s, chargerId, 'start', {name:data.name, dept:data.dept, plate:data.plate}, data.name+(data.dept?(' · '+data.dept):'')+' 님이 충전을 시작했습니다 ('+data.plate+', 예상 '+fmtMinutes(data.minutes)+')');
+  return s;
+}
+function doEnd(state, chargerId){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  var prevCur = c.current;
+  var who = prevCur ? prevCur.name : '알 수 없음';
+  c.status='idle'; c.current=null;
+  pushHistory(s, chargerId, 'end', {name:who, dept:prevCur?prevCur.dept:'', plate:prevCur?prevCur.plate:''}, who+' 님이 충전을 종료했습니다');
+  return s;
+}
+function doReserve(state, chargerId, data){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  c.queue.push({id:uid(), name:data.name, dept:data.dept||'', plate:data.plate, ext:lookupExtInRoster(s.staffRoster, data.name, s.staffPhoneFormat), from:data.from, to:data.to});
+  c.queue.sort(function(a,b){ return a.from.localeCompare(b.from); });
+  pushHistory(s, chargerId, 'reserve', {name:data.name, dept:data.dept, plate:data.plate}, data.name+' 님이 '+fmtClock(data.from)+'~'+fmtClock(data.to)+' 예약했습니다');
+  return s;
+}
+function doCancelReserve(state, chargerId, reservationId){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  var item = null;
+  c.queue = c.queue.filter(function(q){ if(q.id===reservationId){ item=q; return false;} return true; });
+  if(item) pushHistory(s, chargerId, 'cancel_reserve', {name:item.name, dept:item.dept, plate:item.plate}, item.name+' 님의 예약이 취소되었습니다');
+  return s;
+}
+function doStartFromReserve(state, chargerId, reservationId){
+  var c = state.chargers[chargerId];
+  if(!c) return {error:'충전기 정보를 찾을 수 없어요.'};
+  if(c.status!=='idle') return {error:'지금은 이 충전기가 비어있지 않아 예약을 바로 충전으로 전환할 수 없어요.'};
+  var item = (c.queue||[]).filter(function(q){ return q.id===reservationId; })[0];
+  if(!item) return {error:'예약 정보를 찾을 수 없어요. 새로고침 후 다시 시도해 주세요.'};
+  var minutes = Math.max(5, Math.round((new Date(item.to).getTime()-new Date(item.from).getTime())/60000));
+  var s = doStart(state, chargerId, {name:item.name, dept:item.dept, plate:item.plate, minutes:minutes});
+  s.history[0].text += ' (예약을 충전으로 전환)';
+  s.chargers[chargerId].queue = (s.chargers[chargerId].queue||[]).filter(function(q){ return q.id!==reservationId; });
+  return {state:s};
+}
+function doMaintOn(state, chargerId, note){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  var hadSession = !!c.current;
+  c.status='maintenance'; c.current=null; c.note = note||'';
+  pushHistory(s, chargerId, 'maintenance_on', {}, '점검중으로 표시되었습니다'+(note?(' · '+note):'')+(hadSession?' (진행 중이던 충전은 종료 처리됨)':''));
+  return s;
+}
+function doMaintOff(state, chargerId){
+  var s = cloneState(state); var c = s.chargers[chargerId];
+  c.status='idle'; c.note=null;
+  pushHistory(s, chargerId, 'maintenance_off', {}, '점검이 완료되어 사용 가능으로 전환되었습니다');
+  return s;
+}
+
+var BOLT_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h7l-1 8 11-13h-7l0-7z"/></svg>';
+var PLUG_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v5"/><path d="M15 2v5"/><path d="M7 9h10v3a5 5 0 0 1-5 5 5 5 0 0 1-5-5V9Z"/><path d="M12 17v5"/></svg>';
+var QUEUE_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="3"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
+// v45: 방울이 마스코트 배치를 좌우 반전(왼쪽=캐릭터, 오른쪽=자동차)하고,
+// 이전 버전에서 캔버스 경계에 잘려 있던 자동차 뒷부분(뒷문·뒷바퀴·범퍼)을 이미지 편집으로 예측 보완해 완성된 옆모습으로 만듦.
+// 자동차가 완성되며 가로 비율이 커진 점을 고려해 표시 크기를 v44보다 더 축소했고, 특히 가로(좌우) 폭을 세로보다 더 큰 비율로 줄임.
+var MASCOT_IMG_URL = 'data:image/png;base64,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';
+var MASCOT_CHAR_HTML = '<img src="'+MASCOT_IMG_URL+'" alt="충전 중인 방울이 캐릭터" draggable="false">';
+var DROP_ICON_SVG = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s7 7.58 7 12a7 7 0 0 1-14 0c0-4.42 7-12 7-12Z"/></svg>';
+var DROP_ICON_SMALL_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s7 7.58 7 12a7 7 0 0 1-14 0c0-4.42 7-12 7-12Z"/></svg>';
+function sectionTitleHtml(text){
+  return '<span class="section-title-icon">'+DROP_ICON_SMALL_SVG+'</span><span>'+text+'</span>';
+}
+function renderChip(icon, label, value){ return '<div class="chip"><span class="chip-icon">'+icon+'</span><div class="chip-text"><b>'+value+'</b><span>'+label+'</span></div></div>'; }
+function renderSummary(state){
+  var chargerOrder = state.chargerOrder||[];
+  var fastIds = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='fast'; });
+  var slowIds = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='slow'; });
+  var fastBusy = fastIds.filter(function(id){ return state.chargers[id].status==='charging'; }).length;
+  var slowBusy = slowIds.filter(function(id){ return state.chargers[id].status==='charging'; }).length;
+  var totalQueue = chargerOrder.reduce(function(n,id){ return n+state.chargers[id].queue.length; },0);
+  return renderChip(BOLT_ICON_SVG, '급속 사용중', fastBusy+' / '+fastIds.length)+renderChip(PLUG_ICON_SVG, '완속 사용중', slowBusy+' / '+slowIds.length)+renderChip(QUEUE_ICON_SVG, '대기 예약', totalQueue+'건');
+}
+function renderRemain(cur){
+  var end = new Date(cur.expectedEnd).getTime(); var start = new Date(cur.startedAt).getTime(); var now = Date.now();
+  var total = Math.max(end-start,1); var elapsed = Math.min(Math.max(now-start,0), total*1.6);
+  var pct = Math.min(100, Math.round(elapsed/total*100));
+  var mascotPct = Math.min(96, Math.max(4, pct)); // 캐릭터가 트랙 양끝 밖으로 잘려나가지 않도록 살짝 여유를 둠
+  var diffMin = Math.round((end-now)/60000); var overdue = diffMin<0;
+  var text = overdue ? ('예상 시간이 '+Math.abs(diffMin)+'분 지났습니다') : (diffMin<=0 ? '곧 완료 예정' : ('약 '+diffMin+'분 남음'));
+  return '<div class="mascot-progress">'
+    +'<div class="progress-track"><div class="progress-fill" style="width:'+pct+'%"></div></div>'
+    +'<div class="mascot-car" style="left:'+mascotPct+'%">'+MASCOT_CHAR_HTML+'</div>'
+    +'</div>'
+    +'<div class="remain'+(overdue?' overdue':'')+'"><span>'+fmtClock(cur.startedAt)+' 시작</span><span>'+text+'</span></div>';
+}
+function renderQueue(chargerId, queue, writable, chargerStatus){
+  if(!queue.length) return '<div class="queue"><div class="queue-title">예약 대기열</div><div class="queue-empty">예약이 없습니다</div></div>';
+  var canStart = writable && chargerStatus==='idle';
+  var rows = queue.map(function(q){
+    var actions = (canStart?('<button class="btn small primary" data-action="start-from-reserve" data-charger="'+chargerId+'" data-id="'+q.id+'">지금 시작</button>'):'')
+      +(writable?('<button class="btn small ghost" data-action="cancel-reserve" data-charger="'+chargerId+'" data-id="'+q.id+'">취소</button>'):'');
+    return '<div class="queue-item"><span class="who">'+escapeHtml(q.name)+(q.dept?(' · '+escapeHtml(q.dept)):'')+(q.ext?(' · <span class="phone">'+escapeHtml(q.ext)+'</span>'):'')+'</span>'
+      +'<span class="when">'+fmtClock(q.from)+'–'+fmtClock(q.to)+'</span>'
+      +(actions?('<div class="queue-actions">'+actions+'</div>'):'')
+      +'</div>';
+  }).join('');
+  return '<div class="queue"><div class="queue-title">예약 대기열 <span>'+queue.length+'건</span></div>'+rows+'</div>';
+}
+function renderCard(chargerId, c, writable, meta){
+  var body='';
+  var dis = writable?'':'disabled';
+  if(c.status==='idle'){
+    body = '<div class="idle-msg">현재 비어 있어요. 바로 충전을 시작할 수 있습니다.</div>'
+      +'<div class="btn-row"><button class="btn primary" data-action="open-start" data-charger="'+chargerId+'" '+dis+'>충전 시작</button>'
+      +'<button class="btn" data-action="open-reserve" data-charger="'+chargerId+'" '+dis+'>예약하기</button>'
+      +'<button class="btn ghost" data-action="open-maint" data-charger="'+chargerId+'" '+dis+'>점검중으로 표시</button></div>';
+  } else if(c.status==='charging'){
+    var cur = c.current;
+    body = '<div class="session">'
+      +'<div class="session-row"><span class="k">사용자</span><span class="v">'+escapeHtml(cur.name)+(cur.dept?(' · '+escapeHtml(cur.dept)):'')+(cur.ext?(' · <span class="phone">'+escapeHtml(cur.ext)+'</span>'):'')+'</span></div>'
+      +'<div class="session-row"><span class="k">차량번호</span><span class="v">'+escapeHtml(cur.plate)+'</span></div>'
+      +'<div class="session-row"><span class="k">예상 종료</span><span class="v">'+fmtClock(cur.expectedEnd)+'</span></div>'
+      +renderRemain(cur)+'</div>'
+      +'<div class="btn-row"><button class="btn primary" data-action="end-charging" data-charger="'+chargerId+'" '+dis+'>충전 종료</button>'
+      +'<button class="btn ghost" data-action="open-reserve" data-charger="'+chargerId+'" '+dis+'>다음 예약 추가</button></div>';
+  } else {
+    body = '<div class="maint-note">점검중입니다.'+(c.note?(' · '+escapeHtml(c.note)):'')+'</div>'
+      +'<div class="btn-row"><button class="btn primary" data-action="clear-maint" data-charger="'+chargerId+'" '+dis+'>사용 가능으로 전환</button>'
+      +'<button class="btn ghost" data-action="open-reserve" data-charger="'+chargerId+'" '+dis+'>예약 추가</button></div>';
+  }
+  return '<div class="card"><div class="card-accent '+c.status+'"></div><div class="card-body">'
+    +'<div class="card-head"><div><h3>'+meta.name+'</h3><div class="power-badge">'+meta.power+'</div></div>'
+    +'<span class="status-pill '+c.status+'">'+statusLabel(c.status)+'</span></div>'
+    +body+renderQueue(chargerId, c.queue, writable, c.status)+'</div></div>';
+}
+function localDateKey(d){ return d.toLocaleDateString('sv-SE'); }
+function computeDailyUsage(state, days){
+  var now = new Date();
+  var keys = [], counts = {};
+  for(var i=days-1;i>=0;i--){
+    var d = new Date(now.getFullYear(), now.getMonth(), now.getDate()-i);
+    var k = localDateKey(d);
+    keys.push(k); counts[k] = 0;
+  }
+  (state.history||[]).forEach(function(h){
+    if(h.action!=='start') return;
+    var k = localDateKey(new Date(h.time));
+    if(counts.hasOwnProperty(k)) counts[k]++;
+  });
+  return keys.map(function(k){ return {date:k, count:counts[k]}; });
+}
+function computeChargerUsage(state, days){
+  var cutoff = Date.now() - days*86400000;
+  var counts = {};
+  var chargerOrder = state.chargerOrder||[];
+  chargerOrder.forEach(function(id){ counts[id]=0; });
+  (state.history||[]).forEach(function(h){
+    if(h.action!=='start') return;
+    if(new Date(h.time).getTime() < cutoff) return;
+    if(counts.hasOwnProperty(h.chargerId)) counts[h.chargerId]++;
+  });
+  return chargerOrder.map(function(id){ return {id:id, name:state.chargerMeta[id].name, count:counts[id]}; });
+}
+function roundedTopBarPath(x, y, w, h, r){
+  r = Math.max(0, Math.min(r, w/2, h));
+  if(h<=0) return '';
+  if(r<=0.01){
+    return 'M'+x+','+(y+h)+' L'+x+','+y+' L'+(x+w)+','+y+' L'+(x+w)+','+(y+h)+' Z';
+  }
+  return 'M'+x+','+(y+h)
+    +' L'+x+','+(y+r)
+    +' Q'+x+','+y+' '+(x+r)+','+y
+    +' L'+(x+w-r)+','+y
+    +' Q'+(x+w)+','+y+' '+(x+w)+','+(y+r)
+    +' L'+(x+w)+','+(y+h)+' Z';
+}
+function renderDailyBarChart(data){
+  var counts = data.map(function(d){ return d.count; });
+  var max = Math.max.apply(null, counts);
+  var maxSafe = max>0 ? max : 1;
+  var w=300, h=132, padL=4, padR=4, padT=16, padB=20;
+  var innerW=w-padL-padR, innerH=h-padT-padB;
+  var n=data.length, gap=1.2;
+  var band=innerW/n;
+  var barW=Math.max(1.6, Math.min(10, band-gap));
+  var baseline=padT+innerH;
+  var bars = data.map(function(d,i){
+    var x = padL+i*band+(band-barW)/2;
+    var bh = max>0 ? (d.count/maxSafe)*(innerH-4) : 0;
+    var y = baseline-bh;
+    var path = roundedTopBarPath(x, y, barW, bh, Math.min(3, barW/2));
+    if(!path) return '';
+    var title = d.date+' · '+d.count+'건';
+    return '<path d="'+path+'" fill="var(--viz-cat-1)"><title>'+escapeHtml(title)+'</title></path>';
+  }).join('');
+  var step = Math.max(1, Math.round(n/6));
+  var labelIdxs = [];
+  for(var i=0;i<n;i+=step) labelIdxs.push(i);
+  if(labelIdxs[labelIdxs.length-1]!==n-1) labelIdxs.push(n-1);
+  var labels = labelIdxs.map(function(i){
+    var parts = data[i].date.split('-');
+    var short = parts[1]+'/'+parts[2];
+    var x = padL+i*band+band/2;
+    return '<text class="bar-label" x="'+x.toFixed(1)+'" y="'+(h-6)+'" text-anchor="middle">'+short+'</text>';
+  }).join('');
+  var maxLabel = max>0 ? '<text class="value-label" x="'+padL+'" y="'+(padT-5)+'">최대 '+max+'건</text>' : '';
+  var gridline = '<line class="axis-line" x1="'+padL+'" y1="'+baseline+'" x2="'+(w-padR)+'" y2="'+baseline+'"/>';
+  return '<svg class="bar-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="일별 충전 시작 건수, 최근 '+n+'일">'
+    +gridline+bars+labels+maxLabel+'</svg>';
+}
+function renderChargerBarChart(data){
+  var counts = data.map(function(d){ return d.count; });
+  var max = Math.max.apply(null, counts);
+  var maxSafe = max>0 ? max : 1;
+  var w=300, h=150, padL=10, padR=10, padT=24, padB=26;
+  var innerW=w-padL-padR, innerH=h-padT-padB;
+  var n=data.length;
+  var band=innerW/n;
+  var barW=Math.min(46, band-16);
+  var baseline=padT+innerH;
+  var colors=['var(--viz-cat-1)','var(--viz-cat-2)','var(--viz-cat-3)'];
+  var bars = data.map(function(d,i){
+    var bh = max>0 ? (d.count/maxSafe)*(innerH-6) : 0;
+    var x = padL+i*band+(band-barW)/2;
+    var y = baseline-bh;
+    var color = colors[i%colors.length];
+    var path = roundedTopBarPath(x, y, barW, bh, 4);
+    var shortName = d.name.replace('충전기 ','');
+    var labelY = bh>=16 ? (y-6) : Math.max(y-6, padT-6);
+    var valueLabel = '<text class="value-label" x="'+(x+barW/2).toFixed(1)+'" y="'+labelY+'" text-anchor="middle">'+d.count+'</text>';
+    var nameLabel = '<text class="bar-label" x="'+(x+barW/2).toFixed(1)+'" y="'+(h-8)+'" text-anchor="middle">'+escapeHtml(shortName)+'</text>';
+    var rect = path ? '<path d="'+path+'" fill="'+color+'"><title>'+escapeHtml(d.name+' · '+d.count+'건')+'</title></path>' : '';
+    return rect+valueLabel+nameLabel;
+  }).join('');
+  var gridline='<line class="axis-line" x1="'+padL+'" y1="'+baseline+'" x2="'+(w-padR)+'" y2="'+baseline+'"/>';
+  return '<svg class="bar-chart" viewBox="0 0 '+w+' '+h+'" role="img" aria-label="충전기별 충전 시작 건수, 최근 30일">'+gridline+bars+'</svg>';
+}
+var STATS_DAYS = 30;
+function renderStatsSection(state){
+  var daily = computeDailyUsage(state, STATS_DAYS);
+  var byCharger = computeChargerUsage(state, STATS_DAYS);
+  var total = daily.reduce(function(sum,d){ return sum+d.count; },0);
+  if(total===0){
+    return '<div class="stats-card"><div class="stats-empty">최근 '+STATS_DAYS+'일간 충전 이용 기록이 없습니다.</div></div>';
+  }
+  return '<div class="stats-grid">'
+    +'<div class="stats-card"><h4>일별 이용 건수</h4><div class="stats-sub">최근 '+STATS_DAYS+'일 · 충전 시작 기준 · 총 '+total+'건</div>'+renderDailyBarChart(daily)+'</div>'
+    +'<div class="stats-card"><h4>충전기별 이용 건수</h4><div class="stats-sub">최근 '+STATS_DAYS+'일 · 충전 시작 기준</div>'+renderChargerBarChart(byCharger)+'</div>'
+    +'</div>';
+}
+var EXPORT_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>';
+var LOCK_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
+var SETTINGS_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+function renderApp(state, writable, sharedMode, hasDownloads, isAdmin){
+  var chargerOrder = state.chargerOrder||[];
+  var cards = chargerOrder.map(function(id){ return renderCard(id, state.chargers[id], writable, state.chargerMeta[id]); }).join('');
+  var fastCount = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='fast'; }).length;
+  var slowCount = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='slow'; }).length;
+  var dashboardSubtitle = '급속 '+fastCount+'대 · 완속 '+slowCount+'대 실시간 이용 현황';
+  var settingsLink = '<button type="button" class="btn icon-btn" data-action="open-settings" title="충전기·부 이름·차량 목록을 관리합니다. (관리자 전용)">'+SETTINGS_ICON_SVG+'<span>기본정보 설정</span></button>';
+  var adminBtn = isAdmin
+    ? '<button class="btn ghost small" data-action="admin-logout">관리자 로그아웃</button>'
+    : '<button class="btn icon-btn" data-action="open-admin" title="전체 이용 기록 열람과 엑셀 내보내기는 관리자만 할 수 있어요.">'+LOCK_ICON_SVG+'<span>관리자 로그인</span></button>';
+  var bottomActions = '<div class="bottom-actions">'+settingsLink+adminBtn+'</div>';
+  var historyControls = (isAdmin && hasDownloads)
+    ? '<button class="btn icon-btn" data-action="export-history" title="저장된 전체 이용 기록을 엑셀(CSV) 파일로 내려받습니다.">'+EXPORT_ICON_SVG+'<span>엑셀로 내보내기</span></button>'
+    : '';
+  return '<div class="topbar"><div class="topbar-inner">'
+    +'<div class="brand-row"><div class="brand-logo">'+DROP_ICON_SVG+'</div><div><h1>한강서부사업단 EV 충전기 현황</h1><div class="subtitle">'+dashboardSubtitle+'</div></div></div>'
+    +'<div class="chips">'+renderSummary(state)+'</div></div></div>'
+    +'<div class="sync-status" id="syncBadge"></div>'
+    +'<div class="wrap">'
+    +(writable?'':'<div class="readonly-banner">이 화면은 보기 전용입니다. 변경사항이 저장되지 않아요.</div>')
+    +(sharedMode?'':'<div class="readonly-banner">⚠ 공유 저장이 연결되지 않아 이 화면에서만 임시로 표시됩니다. 다른 사람에게는 보이지 않아요.</div>')
+    +'<div class="section-title">'+sectionTitleHtml('충전기 현황')+'</div><div class="cards-grid">'+cards+'</div>'
+    +'<div class="section-title-row"><div class="section-title">'+sectionTitleHtml('이용 통계 (최근 1개월)')+'</div>'+historyControls+'</div>'
+    +renderStatsSection(state)
+    +(isAdmin ? ('<div class="section-title">'+sectionTitleHtml('최근 이용내역 (최근 '+RECENT_HISTORY_COUNT+'건, 관리자 전용)')+'</div>'+renderRecentHistory(state)) : '')
+    + bottomActions
+    +'</div>'
+    +'<div class="footer-bar"><div class="footer-bar-inner"><span>사내 업무용 전기차 충전기 현황판 · '+APP_VERSION_LABEL+'</span><span>이 화면에서 직접 충전 시작·종료·예약을 관리합니다</span><button type="button" class="diag-log-link" data-action="open-diag-log">진단 로그 보기</button></div></div>';
+}
+function sortItems(arr, field, dir){
+  var copy = arr.slice();
+  copy.sort(function(a,b){
+    var cmp;
+    if(field==='org'){
+      cmp = staffOrgSortValue(a.name) - staffOrgSortValue(b.name);
+    } else if(field==='dept'){
+      cmp = deptSortValue(a.dept) - deptSortValue(b.dept);
+      if(cmp===0) cmp = String(a.dept||'').localeCompare(String(b.dept||''), 'ko', {numeric:true});
+    } else {
+      var av = String(a[field]==null?'':a[field]), bv = String(b[field]==null?'':b[field]);
+      cmp = av.localeCompare(bv, 'ko', {numeric:true});
+    }
+    return dir==='desc' ? -cmp : cmp;
+  });
+  return copy;
+}
+function sortBarHtml(kind, fields, sortState){
+  var options = fields.map(function(f){
+    return '<option value="'+f.value+'"'+(f.value===sortState.field?' selected':'')+'>'+f.label+'</option>';
+  }).join('');
+  var dirIcon = sortState.dir==='asc' ? '▲' : '▼';
+  return '<div class="sort-bar">'
+    +'<select class="sort-field-select" data-kind="'+kind+'" title="정렬 기준">'+options+'</select>'
+    +'<button type="button" class="sort-dir-btn" data-action="toggle-sort-dir" data-kind="'+kind+'" title="정렬 방향 전환">'+dirIcon+'</button>'
+    +'</div>';
+}
+function bulkBarHtml(kind){
+  return '<div class="bulk-bar">'
+    +'<button type="button" class="btn small" data-action="csv-download" data-kind="'+kind+'">📥 엑셀 다운로드</button>'
+    +'<button type="button" class="btn small ghost" data-action="csv-template" data-kind="'+kind+'">기본 양식 받기</button>'
+    +'<button type="button" class="btn small ghost" data-action="csv-upload-trigger" data-kind="'+kind+'">📤 엑셀 업로드</button>'
+    +'<input type="file" accept=".csv" id="csvFile_'+kind+'" class="csv-file-input" data-kind="'+kind+'" hidden>'
+    +'</div>';
+}
+function renderSettingsPage(state, writable, sharedMode, isAdmin){
+  var head = '<div class="topbar"><div class="topbar-inner">'
+    +'<div class="brand-row"><div class="brand-logo">'+DROP_ICON_SVG+'</div><div><h1>기본 입력정보 설정</h1><div class="subtitle">충전기 · 차량 · 부 · 명부 관리 (관리자 전용)</div></div></div>'
+    +'</div></div>'
+    +'<div class="sync-status" id="syncBadge"></div>';
+  var footer = '<div class="footer-bar"><div class="footer-bar-inner"><span>사내 업무용 전기차 충전기 현황판 · '+APP_VERSION_LABEL+'</span><span>이 화면에서 직접 충전 시작·종료·예약을 관리합니다</span><button type="button" class="diag-log-link" data-action="open-diag-log">진단 로그 보기</button></div></div>';
+  if(!isAdmin){
+    return head + '<div class="wrap">'
+      +'<button type="button" class="btn ghost settings-back" data-action="close-settings">← 현황판으로 돌아가기</button>'
+      +'<div class="readonly-banner">이 화면은 관리자만 사용할 수 있어요. 먼저 관리자로 로그인해 주세요.</div>'
+      +'<div class="btn-row"><button class="btn primary" data-action="open-admin">관리자 로그인</button></div>'
+      +'</div>' + footer;
+  }
+
+  var TABS = [
+    {id:'chargers', label:'충전기 목록', count:(state.chargerOrder||[]).length},
+    {id:'vehicles', label:'차량 목록', count:(state.vehicles||[]).length},
+    {id:'depts', label:'부 명칭', count:(state.depts||[]).length},
+    {id:'roster', label:'명부', count:(state.staffRoster||[]).length}
+  ];
+  var activeTab = TABS.some(function(t){ return t.id===settingsTab; }) ? settingsTab : 'chargers';
+  var tabBar = '<div class="settings-tabs">' + TABS.map(function(t){
+    return '<button type="button" class="tab-btn'+(t.id===activeTab?' active':'')+'" data-action="settings-tab" data-tab="'+t.id+'">'+t.label+'<span class="tab-count">'+t.count+'</span></button>';
+  }).join('') + '</div>';
+
+  var panels = '';
+
+  // ---- 충전기 목록 ----
+  var chargerOrder = state.chargerOrder || [];
+  var chargerMeta = state.chargerMeta || {};
+  var chargerRows = chargerOrder.length ? chargerOrder.map(function(id){
+    var meta = chargerMeta[id] || {name:'', type:'fast', power:''};
+    var runtime = state.chargers[id] || {status:'idle', queue:[]};
+    var busy = runtime.status!=='idle' || (runtime.queue && runtime.queue.length>0);
+    return '<div class="settings-row" data-id="'+id+'">'
+      +'<input class="c-name" data-id="'+id+'" value="'+escapeHtml(meta.name)+'" maxlength="20" placeholder="충전기 이름" '+(writable?'':'disabled')+'>'
+      +'<select class="c-type" data-id="'+id+'" '+(writable?'':'disabled')+'><option value="fast"'+(meta.type==='fast'?' selected':'')+'>급속</option><option value="slow"'+(meta.type==='slow'?' selected':'')+'>완속</option></select>'
+      +'<input class="c-power" data-id="'+id+'" value="'+escapeHtml(meta.power||'')+'" maxlength="30" placeholder="전력 사양 (예: 50kW급 · DC콤보)" '+(writable?'':'disabled')+'>'
+      +(writable?('<button class="btn small" data-action="save-charger" data-id="'+id+'">저장</button>'
+        +'<button class="btn small ghost" data-action="delete-charger" data-id="'+id+'" title="'+(busy?'사용중이거나 예약이 있으면 삭제할 수 없어요.':'삭제')+'">삭제</button>'):'')
+      +'</div>';
+  }).join('') : '<div class="empty-note">등록된 충전기가 없습니다.</div>';
+  var addChargerRow = writable
+    ? '<form id="addChargerForm" class="settings-add-row" novalidate>'
+      +'<input name="name" placeholder="충전기 이름 (예: 급속 충전기 3)" maxlength="20">'
+      +'<select name="type"><option value="fast">급속</option><option value="slow">완속</option></select>'
+      +'<input name="power" placeholder="전력 사양 (선택, 예: 50kW급 · DC콤보)" maxlength="30">'
+      +'<button type="button" class="btn primary small" data-action="submit-form" data-form="addChargerForm">충전기 추가</button>'
+      +'</form>'
+    : '';
+  panels += '<div class="settings-panel" data-panel="chargers"'+(activeTab==='chargers'?'':' hidden')+'>'
+    +'<div class="settings-hint">충전기를 추가하거나 이름·구분(급속/완속)·전력 사양을 바꿀 수 있어요. 지금 충전중이거나 예약이 남아있는 충전기는 삭제할 수 없어요 (먼저 종료하거나 예약을 취소해 주세요).</div>'
+    +'<div class="settings-card">'+chargerRows+addChargerRow+'</div>'
+    +'</div>';
+
+  // ---- 차량 목록 ----
+  var depts = state.depts || [];
+  var vehicles = state.vehicles || [];
+  var vehiclesSorted = sortItems(vehicles, vehicleSort.field, vehicleSort.dir);
+  var vehicleRows = vehiclesSorted.length ? vehiclesSorted.map(function(v){
+    return '<div class="settings-row" data-id="'+v.id+'">'
+      +'<select class="v-dept" data-id="'+v.id+'" '+(writable?'':'disabled')+'>'+deptOptionsHtml(state, v.dept, false)+'</select>'
+      +'<input class="v-plate" data-id="'+v.id+'" value="'+escapeHtml(v.plate)+'" maxlength="12" placeholder="차량번호" '+(writable?'':'disabled')+'>'
+      +'<input class="v-model" data-id="'+v.id+'" value="'+escapeHtml(v.model||'')+'" maxlength="30" placeholder="차종" '+(writable?'':'disabled')+'>'
+      +(writable?('<button class="btn small" data-action="save-vehicle" data-id="'+v.id+'">저장</button>'
+        +'<button class="btn small ghost" data-action="delete-vehicle" data-id="'+v.id+'">삭제</button>'):'')
+      +'</div>';
+  }).join('') : '<div class="empty-note">등록된 차량이 없습니다.</div>';
+  var addRow = writable
+    ? '<form id="addVehicleForm" class="settings-add-row" novalidate>'
+      +'<select name="dept">'+deptOptionsHtml(state,'')+'</select>'
+      +'<input name="plate" placeholder="차량번호 (예: 12가3456)" maxlength="12">'
+      +'<input name="model" placeholder="차종 (예: EV6 롱레인지)" maxlength="30">'
+      +'<button type="button" class="btn primary small" data-action="submit-form" data-form="addVehicleForm">차량 추가</button>'
+      +'</form>'
+    : '';
+  var vehicleSortFields = [{value:'dept',label:'부'},{value:'plate',label:'차량번호'},{value:'model',label:'차종'}];
+  panels += '<div class="settings-panel" data-panel="vehicles"'+(activeTab==='vehicles'?'':' hidden')+'>'
+    +'<div class="panel-toolbar"><div class="settings-hint">"충전 시작"·"예약하기" 화면의 차량번호 선택지가 여기서 관리하는 목록과 그대로 연동됩니다.</div>'
+    + sortBarHtml('vehicles', vehicleSortFields, vehicleSort) + '</div>'
+    +(writable?bulkBarHtml('vehicles'):'')
+    +'<div class="settings-card">'+vehicleRows+addRow+'</div>'
+    +'</div>';
+
+  // ---- 부 명칭 (공간효율 chip 레이아웃 + 추가/삭제) ----
+  var deptsSorted = depts.slice().sort(function(a,b){
+    var cmp = deptSortValue(a) - deptSortValue(b);
+    return cmp!==0 ? cmp : a.localeCompare(b,'ko',{numeric:true});
+  });
+  var deptChips = deptsSorted.length ? deptsSorted.map(function(d){
+    var inUse = vehicles.some(function(v){ return v.dept===d; });
+    return '<div class="dept-chip" data-dept="'+escapeHtml(d)+'">'
+      +'<input value="'+escapeHtml(d)+'" data-old="'+escapeHtml(d)+'" maxlength="20" '+(writable?'':'disabled')+'>'
+      +(writable?('<button type="button" class="chip-btn" data-action="save-dept-name" data-old="'+escapeHtml(d)+'" title="저장">✓</button>'
+        +'<button type="button" class="chip-btn" data-action="delete-dept" data-dept="'+escapeHtml(d)+'" title="'+(inUse?'차량이 있어서 삭제할 수 없어요.':'삭제')+'">✕</button>'):'')
+      +'</div>';
+  }).join('') : '<div class="empty-note">등록된 부가 없습니다.</div>';
+  var addDeptChip = writable
+    ? '<form id="addDeptForm" class="dept-chip dept-chip-add" novalidate>'
+      +'<input name="name" placeholder="+ 새 부 이름" maxlength="20">'
+      +'<button type="button" class="chip-btn" data-action="submit-form" data-form="addDeptForm" title="추가">✓</button>'
+      +'</form>'
+    : '';
+  panels += '<div class="settings-panel" data-panel="depts"'+(activeTab==='depts'?'':' hidden')+'>'
+    +'<div class="settings-hint">이름을 고치고 체크를 누르면 그 부에 속한 차량들의 부 이름도 함께 바뀝니다. 차량이 등록된 부는 먼저 차량을 다른 부로 옮기거나 삭제해야 지울 수 있어요.</div>'
+    +'<div class="dept-chips">'+deptChips+addDeptChip+'</div>'
+    +'</div>';
+
+  // ---- 명부 (하위 탭: 명부 목록 / 명부 양식) ----
+  var staffRoster = state.staffRoster || [];
+  var fmt = state.staffPhoneFormat || DEFAULT_PHONE_FORMAT;
+  var rTab = (rosterTab==='format') ? 'format' : 'list';
+  var rosterSubTabs = '<div class="settings-subtabs">'
+    +'<button type="button" class="subtab-btn'+(rTab==='list'?' active':'')+'" data-action="roster-tab" data-tab="list">명부 목록</button>'
+    +'<button type="button" class="subtab-btn'+(rTab==='format'?' active':'')+'" data-action="roster-tab" data-tab="format">명부 양식</button>'
+    +'</div>';
+  var staffRosterSorted = sortItems(staffRoster, staffSort.field, staffSort.dir);
+  var staffRows = staffRosterSorted.length ? staffRosterSorted.map(function(r){
+    return '<div class="settings-row" data-id="'+r.id+'">'
+      +'<input class="s-dept" data-id="'+r.id+'" value="'+escapeHtml(r.dept||'')+'" maxlength="20" placeholder="구분(과)" '+(writable?'':'disabled')+'>'
+      +'<input class="s-name" data-id="'+r.id+'" value="'+escapeHtml(r.name)+'" maxlength="20" placeholder="이름" '+(writable?'':'disabled')+'>'
+      +'<input class="s-ext" data-id="'+r.id+'" value="'+escapeHtml(r.ext)+'" maxlength="'+fmt.digits+'" placeholder="구내번호 '+fmt.digits+'자리" '+(writable?'':'disabled')+'>'
+      +'<span class="settings-row-preview">'+escapeHtml(formatExt(r.ext, fmt))+'</span>'
+      +(writable?('<button class="btn small" data-action="save-staff" data-id="'+r.id+'">저장</button>'
+        +'<button class="btn small ghost" data-action="delete-staff" data-id="'+r.id+'">삭제</button>'):'')
+      +'</div>';
+  }).join('') : '<div class="empty-note">등록된 인원이 없습니다.</div>';
+  var addStaffRow = writable
+    ? '<form id="addStaffForm" class="settings-add-row" novalidate>'
+      +'<input name="dept" placeholder="구분(과) (선택)" maxlength="20">'
+      +'<input name="name" placeholder="이름" maxlength="20">'
+      +'<input name="ext" placeholder="구내번호 '+fmt.digits+'자리" maxlength="'+fmt.digits+'">'
+      +'<button type="button" class="btn primary small" data-action="submit-form" data-form="addStaffForm">인원 추가</button>'
+      +'</form>'
+    : '';
+  var staffSortFields = [{value:'org',label:'기본순서'},{value:'dept',label:'구분'},{value:'name',label:'이름'},{value:'ext',label:'구내번호'}];
+  var rosterListPanel = '<div class="settings-subpanel" data-subpanel="list"'+(rTab==='list'?'':' hidden')+'>'
+    +'<div class="panel-toolbar"><div class="settings-hint">"충전 시작"·"예약하기" 화면의 이름 입력칸에서 추천되는 이름과, 이름 옆에 표시되는 구내번호 목록입니다. 부서원이 바뀌면 여기서 추가·수정·삭제해 주세요.</div>'
+    + sortBarHtml('staff', staffSortFields, staffSort) + '</div>'
+    +(writable?bulkBarHtml('staff'):'')
+    +'<div class="settings-card">'+staffRows+addStaffRow+'</div>'
+    +'</div>';
+  var exampleExt = (new Array(fmt.digits+1)).join('0').slice(0,fmt.digits) || '000';
+  var formatPanel = '<div class="settings-subpanel" data-subpanel="format"'+(rTab==='format'?'':' hidden')+'>'
+    +'<div class="settings-hint">명부 전체에 적용되는 전화번호 표기 양식이에요. 예를 들어 앞자리를 "031-270-9", 자릿수를 3으로 두면 "'+escapeHtml(fmt.prefix||'031-270-9')+exampleExt+'"처럼 표시됩니다. 저장하면 명부의 모든 인원에게 새 양식이 한번에 적용돼요 (개별 구내번호 자체는 그대로 유지).</div>'
+    +'<form id="staffFormatForm" class="settings-add-row" novalidate>'
+      +'<input name="prefix" value="'+escapeHtml(fmt.prefix)+'" placeholder="앞자리 (예: 031-270-9)" maxlength="20">'
+      +'<input name="digits" type="number" min="1" max="6" value="'+fmt.digits+'" placeholder="자릿수" style="width:70px">'
+      +'<button type="button" class="btn primary small" data-action="submit-form" data-form="staffFormatForm">양식 저장</button>'
+      +'</form>'
+    +'<div class="settings-row-preview" style="margin-top:8px;">미리보기: '+escapeHtml(fmt.prefix||'031-270-9')+exampleExt+'</div>'
+    +'</div>';
+  panels += '<div class="settings-panel" data-panel="roster"'+(activeTab==='roster'?'':' hidden')+'>'
+    + rosterSubTabs + rosterListPanel + formatPanel
+    +'</div>';
+
+  return head + '<div class="wrap">'
+    +'<button type="button" class="btn ghost settings-back" data-action="close-settings">← 현황판으로 돌아가기</button>'
+    +(writable?'':'<div class="readonly-banner">이 화면은 보기 전용입니다. 변경사항이 저장되지 않아요.</div>')
+    +(sharedMode?'':'<div class="readonly-banner">⚠ 공유 저장이 연결되지 않아 이 화면에서만 임시로 표시됩니다.</div>')
+    + tabBar + panels
+    +'</div>' + footer;
+}
+function doRenameDept(state, oldName, newName){
+  var s = cloneState(state);
+  s.depts = s.depts || [];
+  var idx = s.depts.indexOf(oldName);
+  if(idx===-1) return {error:'대상 부를 찾을 수 없어요.'};
+  if(s.depts.some(function(d,i){ return i!==idx && d===newName; })) return {error:'이미 같은 이름의 부가 있어요.'};
+  s.depts[idx] = newName;
+  (s.vehicles||[]).forEach(function(v){ if(v.dept===oldName) v.dept = newName; });
+  return {state:s};
+}
+function doAddDept(state, name){
+  var s = cloneState(state);
+  s.depts = s.depts || [];
+  name = (name||'').trim();
+  if(!name) return {error:'부 이름을 입력해 주세요.'};
+  if(s.depts.indexOf(name)>-1) return {error:'이미 있는 부 이름이에요.'};
+  s.depts.push(name);
+  return {state:s};
+}
+function doDeleteDept(state, name){
+  var s = cloneState(state);
+  var inUse = (s.vehicles||[]).some(function(v){ return v.dept===name; });
+  if(inUse) return {error:'이 부에 속한 차량이 있어서 삭제할 수 없어요. 먼저 차량의 부를 옮기거나 삭제해 주세요.'};
+  s.depts = (s.depts||[]).filter(function(d){ return d!==name; });
+  return {state:s};
+}
+function doSaveStaffFormat(state, data){
+  var s = cloneState(state);
+  var prefix = (data.prefix||'').trim();
+  var digits = parseInt(data.digits,10);
+  if(!prefix) return {error:'구내번호 앞자리(예: 031-270-9)를 입력해 주세요.'};
+  if(!digits || digits<1 || digits>6) return {error:'자릿수는 1~6 사이의 숫자로 입력해 주세요.'};
+  s.staffPhoneFormat = {prefix:prefix, digits:digits};
+  return {state:s};
+}
+function doAddStaff(state, data){
+  var s = cloneState(state);
+  s.staffRoster = s.staffRoster || [];
+  var fmt = s.staffPhoneFormat || DEFAULT_PHONE_FORMAT;
+  var name = (data.name||'').trim(), ext = (data.ext||'').trim(), dept = (data.dept||'').trim();
+  if(!name || !ext) return {error:'이름과 구내번호를 입력해 주세요.'};
+  if(!(new RegExp('^[0-9]{'+fmt.digits+'}$')).test(ext)) return {error:'구내번호는 숫자 '+fmt.digits+'자리로 입력해 주세요.'};
+  if(s.staffRoster.some(function(r){ return r.name===name; })) return {error:'이미 등록된 이름이에요. 수정하려면 목록에서 바로 고쳐주세요.'};
+  s.staffRoster.push({id:uid(), name:name, ext:ext, dept:dept});
+  s.staffRoster.sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+  return {state:s};
+}
+function doEditStaff(state, id, data){
+  var s = cloneState(state);
+  s.staffRoster = s.staffRoster || [];
+  var fmt = s.staffPhoneFormat || DEFAULT_PHONE_FORMAT;
+  var r = s.staffRoster.filter(function(x){ return x.id===id; })[0];
+  if(!r) return {error:'명단 정보를 찾을 수 없어요.'};
+  var name = (data.name||'').trim(), ext = (data.ext||'').trim(), dept = (data.dept||'').trim();
+  if(!name || !ext) return {error:'이름과 구내번호를 입력해 주세요.'};
+  if(!(new RegExp('^[0-9]{'+fmt.digits+'}$')).test(ext)) return {error:'구내번호는 숫자 '+fmt.digits+'자리로 입력해 주세요.'};
+  if(s.staffRoster.some(function(x){ return x.id!==id && x.name===name; })) return {error:'이미 등록된 이름이에요.'};
+  r.name = name; r.ext = ext; r.dept = dept;
+  return {state:s};
+}
+function doDeleteStaff(state, id){
+  var s = cloneState(state);
+  s.staffRoster = (s.staffRoster||[]).filter(function(r){ return r.id!==id; });
+  return {state:s};
+}
+function doAddVehicle(state, data){
+  var s = cloneState(state);
+  s.vehicles = s.vehicles || [];
+  if(s.vehicles.some(function(v){ return v.plate===data.plate; })) return {error:'이미 등록된 차량번호예요.'};
+  s.vehicles.push({id:uid(), dept:data.dept, plate:data.plate, model:data.model||''});
+  return {state:s};
+}
+function doEditVehicle(state, id, data){
+  var s = cloneState(state);
+  s.vehicles = s.vehicles || [];
+  var v = s.vehicles.filter(function(x){ return x.id===id; })[0];
+  if(!v) return {error:'차량 정보를 찾을 수 없어요.'};
+  if(s.vehicles.some(function(x){ return x.id!==id && x.plate===data.plate; })) return {error:'이미 등록된 차량번호예요.'};
+  v.dept = data.dept; v.plate = data.plate; v.model = data.model||'';
+  return {state:s};
+}
+function doDeleteVehicle(state, id){
+  var s = cloneState(state);
+  s.vehicles = (s.vehicles||[]).filter(function(v){ return v.id!==id; });
+  return {state:s};
+}
+function doAddCharger(state, data){
+  var s = cloneState(state);
+  s.chargerMeta = s.chargerMeta || {};
+  s.chargerOrder = s.chargerOrder || [];
+  var id = uid();
+  s.chargerMeta[id] = {name:data.name, type:(data.type==='slow'?'slow':'fast'), power:data.power||''};
+  s.chargerOrder.push(id);
+  s.chargers[id] = {status:'idle', current:null, note:null, queue:[]};
+  return {state:s};
+}
+function doEditCharger(state, id, data){
+  var s = cloneState(state);
+  var meta = s.chargerMeta && s.chargerMeta[id];
+  if(!meta) return {error:'충전기 정보를 찾을 수 없어요.'};
+  meta.name = data.name; meta.type = (data.type==='slow'?'slow':'fast'); meta.power = data.power||'';
+  return {state:s};
+}
+function doDeleteCharger(state, id){
+  var s = cloneState(state);
+  var c = s.chargers[id];
+  if(!c) return {error:'충전기 정보를 찾을 수 없어요.'};
+  if(c.status!=='idle') return {error:'지금 충전중이거나 점검중인 충전기는 삭제할 수 없어요. 먼저 충전을 종료하거나 점검을 해제해 주세요.'};
+  if(c.queue && c.queue.length>0) return {error:'예약이 남아있는 충전기는 삭제할 수 없어요. 먼저 예약을 취소해 주세요.'};
+  delete s.chargers[id];
+  if(s.chargerMeta) delete s.chargerMeta[id];
+  s.chargerOrder = (s.chargerOrder||[]).filter(function(x){ return x!==id; });
+  return {state:s};
+}
+function csvEscape(v){
+  var s = String(v==null?'':v);
+  if(/[",\n\r]/.test(s)) s = '"'+s.replace(/"/g,'""')+'"';
+  return s;
+}
+function buildCsv(header, rows){
+  var lines = [header].concat(rows).map(function(r){ return r.map(csvEscape).join(','); });
+  return '\uFEFF' + lines.join('\r\n');
+}
+function downloadTextFile(filename, text, mime){
+  try{
+    var blob = new Blob([text], {type:(mime||'text/csv')+';charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    return true;
+  }catch(err){ return false; }
+}
+// 아주 단순한 CSV 파서. 큰따옴표로 감싼 필드(콤마/줄바꿈/큰따옴표 포함 가능)를 지원한다.
+function parseCsv(text){
+  text = text.replace(/^\uFEFF/, ''); // BOM 제거
+  var rows = [], row = [], field = '', inQuotes = false;
+  for(var i=0;i<text.length;i++){
+    var c = text[i], next = text[i+1];
+    if(inQuotes){
+      if(c==='"' && next==='"'){ field+='"'; i++; }
+      else if(c==='"'){ inQuotes=false; }
+      else { field+=c; }
+    } else {
+      if(c==='"'){ inQuotes=true; }
+      else if(c===','){ row.push(field); field=''; }
+      else if(c==='\r'){ /* skip, \n이 줄바꿈 처리 */ }
+      else if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=''; }
+      else { field+=c; }
+    }
+  }
+  if(field.length || row.length){ row.push(field); rows.push(row); }
+  return rows.filter(function(r){ return !(r.length===1 && r[0].trim()===''); });
+}
+function buildVehiclesCsv(state){
+  var header = ['부','차량번호','차종'];
+  var sorted = sortItems(state.vehicles||[], 'dept', 'asc');
+  var rows = sorted.map(function(v){ return [v.dept||'', v.plate||'', v.model||'']; });
+  return buildCsv(header, rows);
+}
+function buildVehiclesTemplateCsv(state){
+  var header = ['부','차량번호','차종'];
+  var sample = (state.depts && state.depts[0]) || '경영보상부';
+  var rows = [[sample,'12가3456','EV6 롱레인지'], [sample,'34나5678','아이오닉5 롱레인지']];
+  return buildCsv(header, rows);
+}
+function parseVehiclesCsvRows(rows, state){
+  if(!rows.length) return {error:'파일에 내용이 없어요.'};
+  var body = rows.slice(1); // 첫 줄은 헤더로 간주하고 건너뜀
+  var depts = state.depts || [];
+  var out = [], errs = [];
+  body.forEach(function(r, i){
+    var dept = (r[0]||'').trim(), plate = (r[1]||'').trim(), model = (r[2]||'').trim();
+    if(!dept && !plate && !model) return; // 빈 줄 무시
+    if(!dept || !plate){ errs.push((i+2)+'번째 줄: 부와 차량번호는 비어있을 수 없어요.'); return; }
+    if(depts.indexOf(dept)===-1){ errs.push((i+2)+'번째 줄: "'+dept+'"은(는) 등록되지 않은 부예요. 먼저 "부 명칭" 탭에서 추가해 주세요.'); return; }
+    out.push({dept:dept, plate:plate, model:model});
+  });
+  if(errs.length) return {error:'업로드한 파일에서 문제를 찾았어요:\n'+errs.slice(0,8).join('\n')+(errs.length>8?'\n...외 '+(errs.length-8)+'건':'')};
+  if(!out.length) return {error:'등록할 수 있는 차량 정보가 없어요.'};
+  return {rows:out};
+}
+function buildStaffCsv(state){
+  var header = ['구분','이름','구내번호'];
+  var sorted = sortItems(state.staffRoster||[], 'org', 'asc');
+  var rows = sorted.map(function(r){ return [r.dept||'', r.name||'', r.ext||'']; });
+  return buildCsv(header, rows);
+}
+function buildStaffTemplateCsv(state){
+  var header = ['구분','이름','구내번호'];
+  var fmt = state.staffPhoneFormat || DEFAULT_PHONE_FORMAT;
+  var exampleExt = (new Array(fmt.digits+1)).join('1');
+  var rows = [['경영과','홍길동',exampleExt], ['보상1과','김철수',exampleExt]];
+  return buildCsv(header, rows);
+}
+function parseStaffCsvRows(rows, state){
+  if(!rows.length) return {error:'파일에 내용이 없어요.'};
+  var body = rows.slice(1);
+  var fmt = state.staffPhoneFormat || DEFAULT_PHONE_FORMAT;
+  var extRe = new RegExp('^[0-9]{'+fmt.digits+'}$');
+  var out = [], errs = [], seen = {};
+  body.forEach(function(r, i){
+    var dept = (r[0]||'').trim(), name = (r[1]||'').trim(), ext = (r[2]||'').trim();
+    if(!dept && !name && !ext) return;
+    if(!name || !ext){ errs.push((i+2)+'번째 줄: 이름과 구내번호는 비어있을 수 없어요.'); return; }
+    if(!extRe.test(ext)){ errs.push((i+2)+'번째 줄: 구내번호는 숫자 '+fmt.digits+'자리여야 해요. ("'+ext+'")'); return; }
+    if(seen[name]){ errs.push((i+2)+'번째 줄: "'+name+'" 이름이 파일 안에서 중복돼요.'); return; }
+    seen[name] = true;
+    out.push({dept:dept, name:name, ext:ext});
+  });
+  if(errs.length) return {error:'업로드한 파일에서 문제를 찾았어요:\n'+errs.slice(0,8).join('\n')+(errs.length>8?'\n...외 '+(errs.length-8)+'건':'')};
+  if(!out.length) return {error:'등록할 수 있는 인원 정보가 없어요.'};
+  return {rows:out};
+}
+function doReplaceVehicles(state, rows){
+  var s = cloneState(state);
+  s.vehicles = rows.map(function(r){ return {id:uid(), dept:r.dept, plate:r.plate, model:r.model}; });
+  return {state:s};
+}
+function doReplaceStaffRoster(state, rows){
+  var s = cloneState(state);
+  s.staffRoster = rows.map(function(r){ return {id:uid(), name:r.name, ext:r.ext, dept:r.dept}; });
+  s.staffRoster.sort(function(a,b){ return a.name.localeCompare(b.name,'ko'); });
+  return {state:s};
+}
+function fmtDateTime(iso){
+  var d = new Date(iso);
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+function fmtDateTimeShort(iso){
+  var d = new Date(iso);
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  return pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+var RECENT_HISTORY_COUNT = 10;
+function renderRecentHistory(state){
+  var items = (state.history||[]).slice(0, RECENT_HISTORY_COUNT);
+  if(!items.length){
+    return '<div class="history-card"><div class="empty-note">아직 이용 기록이 없습니다.</div></div>';
+  }
+  var rows = items.map(function(h){
+    return '<div class="history-row">'
+      +'<span class="history-time">'+fmtDateTimeShort(h.time)+'</span>'
+      +'<span class="history-charger">'+escapeHtml(h.chargerName||'')+'</span>'
+      +'<span class="history-desc">'+escapeHtml(h.text||'')+'</span>'
+      +'</div>';
+  }).join('');
+  return '<div class="history-card">'+rows+'</div>';
+}
+function buildHistoryCsv(state){
+  var header = ['일시','충전기','구분','이름','부','차량번호','비고'];
+  var rows = state.history.slice().reverse().map(function(h){
+    return [fmtDateTime(h.time), h.chargerName||'', ACTION_LABEL[h.action]||h.action||'', h.name||'', h.dept||'', h.plate||'', h.text||''];
+  });
+  var lines = [header].concat(rows).map(function(r){ return r.map(csvEscape).join(','); });
+  return '\uFEFF' + lines.join('\r\n');
+}
+
+var state = null, isAdmin = false, toastTimer = null, storageOK = true, lastSavedJson = '', pendingStart = null, settingsTab = 'chargers', rosterTab = 'list', pendingBulkImport = null;
+// v47: 저장 상태를 화면에 계속 눈에 보이게 알려주기 위한 값들 (2.6초면 사라지는 토스트와 달리, 문제가 있을 때는
+// 사라지지 않는 배지로 계속 보여줘서 "저장이 실제로 잘 되고 있는지"를 사용자가 스스로 확인할 수 있게 함).
+var lastSyncOK = null, lastSyncAt = 0, lastSyncDetail = '';
+var vehicleSort = {field:'dept', dir:'asc'}, staffSort = {field:'org', dir:'asc'};
+
+function currentView(){
+  return (typeof location!=='undefined' && location.hash==='#settings') ? 'settings' : 'dashboard';
+}
+function paint(){
+  var app = document.getElementById('app');
+  if(!app || !state) return;
+  if(currentView()==='settings'){
+    app.innerHTML = renderSettingsPage(state, true, storageOK, isAdmin);
+  } else {
+    app.innerHTML = renderApp(state, true, storageOK, true, isAdmin);
+  }
+  // v48: 화면을 새로 그릴 때마다 상단 저장 상태 표시줄도 최신 상태로 복원.
+  // (렌더링할 때마다 그 자리의 div가 새로 만들어지므로, 매번 다시 채워줘야 함)
+  updateSyncBadge();
+}
+function exportHistory(){
+  if(!state.history.length){ toast('아직 내보낼 이용 기록이 없어요.'); return; }
+  var csv = buildHistoryCsv(state);
+  var d = new Date();
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  var filename = 'EV충전기_이용기록_'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'_'+pad(d.getHours())+pad(d.getMinutes())+'.csv';
+  try{
+    var blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+    toast('엑셀 파일로 저장했어요.');
+  }catch(err){
+    toast('파일 저장에 실패했어요. 다시 시도해 주세요.');
+  }
+}
+function toast(msg){
+  var el = document.getElementById('toast'); if(!el) return;
+  el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(function(){ el.classList.remove('show'); }, 2600);
+}
+// v47: 저장이 잘 되고 있는지를 계속 화면에 표시. v48: 이전에는 문제가 있을 때만
+// 배지가 나타났는데(화면 하단 고정), 실제로 문제가 재현됐는데도 사용자가 못 봤다는
+// 보고가 있어 — (1) 위치를 헤더 바로 아래 본문 안으로 옮기고(스크롤 없이 항상 보임,
+// 휴대폰 하단 브라우저 막대에 가려질 걱정 없음), (2) 평소에도 "마지막 확인 시각"을
+// 작게 계속 보여주도록 바꿈. 이렇게 하면 문제가 생겨도 놓치기 어렵고, 문제가 없을
+// 때도 "언제까지는 분명히 정상이었다"는 기준 시각이 항상 화면에 남아 원인 파악에 도움이 됨.
+function updateSyncBadge(){
+  var el = document.getElementById('syncBadge'); if(!el) return;
+  if(lastSyncOK === false){
+    el.classList.add('warn');
+    var t = lastSyncAt ? fmtClock(new Date(lastSyncAt).toISOString()) : '';
+    el.textContent = '⚠ 방금 저장(또는 확인)한 내용이 실제로 반영됐는지 확인하지 못했습니다' + (t?(' ('+t+')'):'') + (lastSyncDetail?(' — '+lastSyncDetail):'') + '. 아래 "진단 로그 보기"를 눌러 화면을 캡처해 알려주시면 원인 파악에 큰 도움이 됩니다.';
+  } else {
+    el.classList.remove('warn');
+    el.textContent = lastSyncAt ? ('마지막 저장 확인: '+fmtClock(new Date(lastSyncAt).toISOString())+' · 정상') : '저장 상태 확인 중...';
+  }
+}
+// v48: window.storage(공유 저장소)와는 별개로, 이 기기(브라우저)에만 남는 진단 기록.
+// 공유 저장소 자체에 원인 불명의 문제가 있을 가능성을 감안해, 그 저장소에 의존하지 않는
+// 별도의 기록을 남겨서 — 문제가 재현된 뒤에도 "그 전에 무슨 일이 있었는지"를 시간 순서대로
+// 되짚어볼 수 있게 함. 최근 150건만 보관(오래된 기록은 자동으로 지워짐).
+// v49: 그런데 v48을 실제로 써보니 "진단 로그 보기 → 전체 복사"를 해도 "(기록된 진단 로그가
+// 없습니다)"만 나온다는 제보를 받음 - 이는 이 화면이 열리는 환경(퍼블리시된 아티팩트의 내부
+// 프레임)에서 localStorage 자체가 막혀있거나(보안 정책상 저장이 거부됨), 쓰기는 되는데 그 값이
+// 유지되지 않고 있을 가능성을 보여주는 매우 중요한 단서 - 어쩌면 charger 데이터가 사라지는
+// 근본 원인(window.storage든 localStorage든 이 환경에서 "영속적인 저장" 자체가 원하는 대로
+// 동작하지 않고 있을 가능성)과 연결될 수도 있음. 그래서 이번에는 (1) localStorage가 실제로
+// 정상 동작하는지 페이지를 열자마자 자체 점검(자가진단)하고, (2) localStorage에 의존하지 않는
+// "이번 화면이 열려있는 동안만 유지되는" 메모리상의 예비 기록을 별도로 남겨서, localStorage가
+// 막혀있어도 최소한 "지금 이 화면에서 무슨 일이 있었는지"는 진단 로그에 항상 나타나게 함.
+var DIAG_LOG_KEY = 'ev_charger_diag_log';
+var DIAG_LOG_MAX = 150;
+var diagLogFallback = []; // localStorage가 막혀있어도 항상 채워지는, 이번 화면 접속에서만 유지되는 예비 기록
+var DIAG_LOG_FALLBACK_MAX = 150;
+var diagStorageSelfTest = null; // {ok:true} 또는 {ok:false, error:'...'} - 아래 IIFE에서 즉시 채워짐
+(function(){
+  try{
+    var testKey = '__ev_charger_diag_selftest__';
+    var testVal = String(Date.now());
+    localStorage.setItem(testKey, testVal);
+    var readBack = localStorage.getItem(testKey);
+    localStorage.removeItem(testKey);
+    if(readBack === testVal){ diagStorageSelfTest = {ok:true}; }
+    else { diagStorageSelfTest = {ok:false, error:'쓰기는 됐지만 읽어온 값이 다름(readBack='+JSON.stringify(readBack)+')'}; }
+  }catch(e){
+    diagStorageSelfTest = {ok:false, error:(e && (e.name ? (e.name+': '+(e.message||'')) : (e.message||String(e)))) || '알 수 없는 오류'};
+  }
+})();
+function diagLog(type, detail){
+  var entry = {t:Date.now(), type:type, detail:detail||''};
+  // 1) localStorage 여부와 무관하게, 이번 화면 접속 동안은 항상 메모리에 남긴다(새로고침하면 사라짐 -
+  //    하지만 "새로고침 직전까지 무슨 일이 있었는지"는 이 예비 기록만으로도 어느 정도 확인 가능).
+  diagLogFallback.push(entry);
+  if(diagLogFallback.length > DIAG_LOG_FALLBACK_MAX) diagLogFallback.shift();
+  // 2) 기기에 계속 남는 localStorage 저장도 시도하되, 실패해도 위 1번은 이미 기록됐으므로 문제없음.
+  try{
+    var raw = localStorage.getItem(DIAG_LOG_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    if(!Array.isArray(arr)) arr = [];
+    arr.push(entry);
+    if(arr.length > DIAG_LOG_MAX) arr = arr.slice(arr.length - DIAG_LOG_MAX);
+    localStorage.setItem(DIAG_LOG_KEY, JSON.stringify(arr));
+  }catch(e){ /* 여기서 실패해도 diagLogFallback에는 이미 남았으므로 화면에는 계속 표시됨 */ }
+}
+function readDiagLog(){
+  try{
+    var raw = localStorage.getItem(DIAG_LOG_KEY);
+    var arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  }catch(e){ return []; }
+}
+// v49: localStorage에 실제로 남아있는 기록과, 이번 화면 접속 동안의 메모리 예비 기록을 합쳐서 보여줌.
+// (localStorage가 정상이면 두 기록이 거의 같으므로 중복은 자동으로 제거되고, localStorage가 막혀있으면
+// 예비 기록만으로라도 "지금 이 화면에서 있었던 일"을 보여줄 수 있음)
+function getMergedDiagLog(){
+  var merged = readDiagLog().concat(diagLogFallback);
+  var seen = {}, out = [];
+  merged.forEach(function(e){
+    var key = e.t+'|'+e.type+'|'+e.detail;
+    if(!seen[key]){ seen[key] = true; out.push(e); }
+  });
+  out.sort(function(a,b){ return a.t - b.t; });
+  return out;
+}
+function fmtDiagTime(ts){
+  var d = new Date(ts);
+  var pad = function(n){ return String(n).padStart(2,'0'); };
+  return pad(d.getMonth()+1)+'/'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+}
+function diagStorageStatusText(){
+  if(!diagStorageSelfTest) return '기기 저장소 상태: 확인 전';
+  if(diagStorageSelfTest.ok) return '기기 저장소(localStorage) 상태: 정상 - 이 기록은 새로고침해도 계속 남습니다.';
+  return '⚠ 기기 저장소(localStorage) 상태: 오류 - '+diagStorageSelfTest.error+' · 이 브라우저(또는 이 화면이 열리는 방식)에서 기기 저장 자체가 막혀있는 것으로 보입니다. 아래 기록은 이번에 화면을 연 뒤부터만 남아있고, 새로고침하면 사라집니다.';
+}
+function diagLogText(){
+  var arr = getMergedDiagLog().slice().reverse();
+  var head = diagStorageStatusText();
+  if(!arr.length) return head + '\n(기록된 진단 로그가 없습니다)';
+  return head + '\n' + arr.map(function(e){ return '['+fmtDiagTime(e.t)+'] '+e.type+(e.detail?(' - '+e.detail):''); }).join('\n');
+}
+function renderDiagLogHtml(){
+  var arr = getMergedDiagLog().slice().reverse();
+  var statusClass = (diagStorageSelfTest && diagStorageSelfTest.ok===false) ? ' style="color:#b45309;"' : '';
+  var head = '<div class="field-hint"'+statusClass+'>'+escapeHtml(diagStorageStatusText())+'</div>';
+  if(!arr.length) return head + '<div class="field-hint">아직 기록된 진단 로그가 없습니다. 문제가 발생한 뒤 다시 눌러 확인해 주세요.</div>';
+  return head + '<div class="diag-log-list">' + arr.map(function(e){
+    return '<div class="diag-log-row"><span class="diag-log-time">'+fmtDiagTime(e.t)+'</span><span class="diag-log-type">'+escapeHtml(e.type)+'</span><span class="diag-log-detail">'+escapeHtml(e.detail||'')+'</span></div>';
+  }).join('') + '</div>';
+}
+function copyDiagLog(){
+  var text = diagLogText();
+  var done = function(){ toast('진단 로그를 복사했어요. 메시지로 붙여넣어 보내주세요.'); };
+  var fail = function(){ toast('복사에 실패했어요. 화면을 캡처해서 보내주셔도 됩니다.'); };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(done).catch(fail);
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.focus(); ta.select();
+      var ok = false;
+      try{ ok = document.execCommand('copy'); }catch(e){}
+      document.body.removeChild(ta);
+      ok ? done() : fail();
+    }
+  }catch(e){ fail(); }
+}
+function loadLastPick(){
+  try{
+    var raw = localStorage.getItem('ev_charger_last_pick');
+    if(!raw) return null;
+    var obj = JSON.parse(raw);
+    if(obj && typeof obj.dept==='string' && typeof obj.plate==='string') return obj;
+  }catch(e){}
+  return null;
+}
+function saveLastPick(dept, plate){
+  try{ localStorage.setItem('ev_charger_last_pick', JSON.stringify({dept:dept, plate:plate})); }catch(e){}
+}
+function openDialog(id, chargerId){
+  var d = document.getElementById(id); if(!d) return;
+  d.dataset.charger = chargerId;
+  var form = d.querySelector('form'); if(form) form.reset();
+  var err = d.querySelector('.field-error'); if(err) err.textContent='';
+  if(id==='startDialog' || id==='reserveDialog'){
+    var deptId = id==='startDialog' ? 'startDept' : 'reserveDept';
+    var plateId = id==='startDialog' ? 'startPlate' : 'reservePlate';
+    var nameExtId = id==='startDialog' ? 'startNameExt' : 'reserveNameExt';
+    var nameExtEl = document.getElementById(nameExtId); if(nameExtEl) nameExtEl.textContent = '';
+    var nameSuggestId = id==='startDialog' ? 'startNameSuggest' : 'reserveNameSuggest';
+    var nameSuggestEl = document.getElementById(nameSuggestId); if(nameSuggestEl){ nameSuggestEl.hidden = true; nameSuggestEl.innerHTML=''; }
+    var deptEl = document.getElementById(deptId), plateEl = document.getElementById(plateId);
+    if(deptEl) deptEl.innerHTML = deptOptionsHtml(state, '');
+    if(plateEl) plateEl.innerHTML = plateOptionsHtml(state, '', '');
+    var lastPick = loadLastPick();
+    if(lastPick && deptEl && plateEl && (state.depts||[]).indexOf(lastPick.dept)!==-1){
+      deptEl.value = lastPick.dept;
+      var vehicleStillExists = (state.vehicles||[]).some(function(v){ return v.dept===lastPick.dept && v.plate===lastPick.plate; });
+      plateEl.innerHTML = plateOptionsHtml(state, lastPick.dept, vehicleStillExists ? lastPick.plate : '');
+    }
+  }
+  if(id==='startDialog'){
+    pendingStart = null;
+    var meta = (state.chargerMeta||{})[chargerId];
+    var ctype = meta ? meta.type : 'fast';
+    var minutesEl = document.getElementById('startMinutes');
+    if(minutesEl) minutesEl.innerHTML = minutesOptionsHtml(ctype, 60);
+    var customInput = document.getElementById('startMinutesCustom');
+    if(customInput){ customInput.value=''; customInput.max = String(chargerMaxMinutes(chargerId)); }
+    toggleStartMinutesCustom();
+  }
+  if(id==='reserveDialog'){
+    var t = document.getElementById('reserveTime');
+    var hintEl = document.getElementById('reserveTimeHint');
+    if(t){
+      var suggested = new Date();
+      var c2 = state.chargers[chargerId];
+      var basedOnPrev = false;
+      if(c2){
+        if(c2.status==='charging' && c2.current && c2.current.expectedEnd){
+          var curEnd = new Date(c2.current.expectedEnd);
+          if(curEnd > suggested){ suggested = curEnd; basedOnPrev = true; }
+        }
+        (c2.queue||[]).forEach(function(q){
+          var qEnd = new Date(q.to);
+          if(qEnd > suggested){ suggested = qEnd; basedOnPrev = true; }
+        });
+      }
+      t.value = String(suggested.getHours()).padStart(2,'0')+':'+String(suggested.getMinutes()).padStart(2,'0');
+      if(hintEl) hintEl.textContent = basedOnPrev ? ('앞선 충전·예약이 끝나는 '+fmtClock(suggested.toISOString())+'로 시작 시각을 자동 설정했어요. 필요하면 직접 바꿀 수 있어요.') : '';
+    }
+  }
+  if(typeof d.showModal === 'function') d.showModal();
+}
+function closeDialog(id){ var d = document.getElementById(id); if(d && d.open) d.close(); }
+function anyDialogOpen(){ return !!document.querySelector('dialog[open]'); }
+
+async function persistState(newState){
+  if(!window.storage){ storageOK = false; return {ok:true}; }
+  var json = JSON.stringify(newState);
+  var lastErr = null;
+  for(var attempt=0; attempt<3; attempt++){
+    try{
+      await window.storage.set(STORAGE_KEY, json, true);
+      lastSavedJson = json;
+      storageOK = true;
+      lastSyncOK = true; lastSyncAt = Date.now(); lastSyncDetail = '';
+      updateSyncBadge();
+      diagLog('save-ok', (attempt+1)+'회차 시도, 크기 '+json.length+'자');
+      // v47: set()이 에러 없이 끝나도 실제로는 반영되지 않는 사례가 있는 것으로 의심됨(사용자 제보:
+      // 충전 시작 시 에러 안내가 전혀 없었는데도, 잠시 후 새로고침·새 탭에서 곧바로 빈 상태가 뜸 —
+      // set()이 "성공"이라고 응답은 했지만 실제 저장소에는 반영되지 않았을 가능성을 시사함).
+      // 다만 저장 직후 "바로" 다시 읽으면 백엔드의 반영 지연(eventual consistency) 때문에 멀쩡한
+      // 저장도 실패로 오판할 위험이 있으므로, 이 확인은 (a) 약간의 지연을 두고, (b) 결과가 실패로
+      // 나와도 이번 저장 자체를 실패 처리하거나 화면을 롤백하지 않고, 진단용 배지만 띄운다.
+      scheduleSaveVerification(json);
+      return {ok:true};
+    }catch(err){
+      lastErr = err;
+      storageOK = false;
+      diagLog('save-fail', (attempt+1)+'회차 시도: '+((err && (err.message||String(err)))||''));
+      if(attempt<2) await new Promise(function(r){ setTimeout(r, 400*(attempt+1)); });
+    }
+  }
+  var detail = '';
+  try{ detail = (lastErr && (lastErr.message || lastErr.code || String(lastErr))) || ''; }catch(e){}
+  lastSyncOK = false; lastSyncAt = Date.now(); lastSyncDetail = detail;
+  updateSyncBadge();
+  diagLog('save-fail-final', '3회 모두 실패: '+detail);
+  return {ok:false, detail:detail, size:json.length};
+}
+var saveVerifyTimer = null;
+function scheduleSaveVerification(expectedJson){
+  clearTimeout(saveVerifyTimer);
+  saveVerifyTimer = setTimeout(function(){
+    if(!window.storage) return;
+    window.storage.get(STORAGE_KEY, true).then(function(check){
+      if(!check || check.value !== expectedJson){
+        // 저장이 성공했다고 응답을 받았는데, 1.5초 뒤 다시 읽어보니 그 값이 실제로 없음 -
+        // 저장이 진짜로는 반영되지 않고 있다는 강한 신호. 사용자가 그 순간 알아챌 수 있게
+        // 사라지지 않는 배지로 계속 표시(단, 이미 다른 저장이 그 사이 더 진행됐을 수도 있으니
+        // 방금 확인하려던 값과 현재 lastSavedJson이 다르면 - 즉 그 사이 새로운 저장이 있었으면 - 무시).
+        if(lastSavedJson === expectedJson){
+          lastSyncOK = false;
+          lastSyncAt = Date.now();
+          lastSyncDetail = '저장 완료 응답 후 재확인 결과 실제로 반영되지 않음';
+          updateSyncBadge();
+          diagLog('verify-mismatch', '저장 1.5초 후 재확인 결과 불일치(값 없음 또는 다른 값)');
+        }
+      } else {
+        diagLog('verify-ok', '저장 1.5초 후 재확인 결과 일치');
+      }
+    }).catch(function(e){ diagLog('verify-error', (e && (e.message||String(e)))||''); /* 검증 자체 실패는 판단 보류 - 배지 상태를 바꾸지 않음 */ });
+  }, 1500);
+}
+async function runAction(newState, msg){
+  var prev = state; state = newState; paint(); toast(msg);
+  var result = await persistState(newState);
+  if(!result.ok){
+    state = prev; paint();
+    var extra = result.detail ? (' ('+result.detail+')') : '';
+    toast('저장하지 못했습니다. 다시 시도해 주세요.'+extra);
+  }
+}
+function runSettingsAction(result, successMsg){
+  if(!result){ toast('처리할 수 없습니다.'); return; }
+  if(result.error){ toast(result.error); return; }
+  runAction(result.state, successMsg);
+}
+function timeInputToISO(hhmm){
+  var parts = hhmm.split(':'); var h=parseInt(parts[0],10), m=parseInt(parts[1],10);
+  var d = new Date(); d.setHours(h,m,0,0); return d.toISOString();
+}
+
+function onClick(e){
+  var btn = e.target.closest ? e.target.closest('[data-action]') : null;
+  if(!btn) return;
+  var action = btn.dataset.action, chargerId = btn.dataset.charger;
+  if(action==='open-start') openDialog('startDialog', chargerId);
+  else if(action==='open-reserve') openDialog('reserveDialog', chargerId);
+  else if(action==='open-maint') openDialog('maintDialog', chargerId);
+  else if(action==='close-dialog') closeDialog(btn.dataset.target);
+  else if(action==='end-charging'){ runAction(doEnd(state, chargerId), '충전을 종료 처리했습니다'); }
+  else if(action==='clear-maint'){ runAction(doMaintOff(state, chargerId), '점검을 해제했습니다'); }
+  else if(action==='cancel-reserve'){ runAction(doCancelReserve(state, chargerId, btn.dataset.id), '예약을 취소했습니다'); }
+  else if(action==='start-from-reserve'){ runSettingsAction(doStartFromReserve(state, chargerId, btn.dataset.id), '예약대로 충전을 시작했습니다'); }
+  else if(action==='confirm-overlap-start'){
+    closeDialog('overlapDialog');
+    closeDialog('startDialog');
+    if(pendingStart){
+      var ps = pendingStart; pendingStart = null;
+      saveLastPick(ps.data.dept, ps.data.plate);
+      runAction(doStart(state, ps.chargerId, ps.data), ps.data.name+' 님 충전을 시작했습니다');
+    }
+  }
+  else if(action==='export-history') exportHistory();
+  else if(action==='open-diag-log'){
+    var diagBody = document.getElementById('diagLogBody');
+    if(diagBody) diagBody.innerHTML = renderDiagLogHtml();
+    var diagDlg = document.getElementById('diagDialog');
+    if(diagDlg && typeof diagDlg.showModal==='function') diagDlg.showModal();
+  }
+  else if(action==='copy-diag-log') copyDiagLog();
+  else if(action==='open-admin') openDialog('adminDialog', null);
+  else if(action==='admin-logout'){
+    isAdmin = false;
+    try{ localStorage.removeItem('ev_charger_admin'); }catch(e){}
+    toast('관리자 보기를 종료했어요.');
+    paint();
+  }
+  else if(action==='save-charger'){
+    var cRow = btn.closest('.settings-row');
+    var cName = cRow ? cRow.querySelector('.c-name') : null;
+    var cType = cRow ? cRow.querySelector('.c-type') : null;
+    var cPower = cRow ? cRow.querySelector('.c-power') : null;
+    var cname = cName ? cName.value.trim() : '', ctype = cType ? cType.value : 'fast', cpower = cPower ? cPower.value.trim() : '';
+    if(!cname){ toast('충전기 이름을 입력해 주세요.'); return; }
+    runSettingsAction(doEditCharger(state, btn.dataset.id, {name:cname, type:ctype, power:cpower}), '충전기 정보를 수정했습니다');
+  }
+  else if(action==='delete-charger'){
+    runSettingsAction(doDeleteCharger(state, btn.dataset.id), '충전기를 삭제했습니다');
+  }
+  else if(action==='save-dept-name'){
+    var deptRow = btn.closest('.dept-chip');
+    var nameInput = deptRow ? deptRow.querySelector('input') : null;
+    var oldName = btn.dataset.old;
+    var newName = nameInput ? nameInput.value.trim() : '';
+    if(!newName){ toast('부 이름을 입력해 주세요.'); return; }
+    if(newName===oldName){ toast('변경된 내용이 없어요.'); return; }
+    runSettingsAction(doRenameDept(state, oldName, newName), '부 이름을 "'+newName+'"(으)로 변경했습니다');
+  }
+  else if(action==='delete-dept'){
+    runSettingsAction(doDeleteDept(state, btn.dataset.dept), '"'+btn.dataset.dept+'" 부를 삭제했습니다');
+  }
+  else if(action==='settings-tab'){
+    settingsTab = btn.dataset.tab;
+    paint();
+  }
+  else if(action==='roster-tab'){
+    rosterTab = btn.dataset.tab;
+    paint();
+  }
+  else if(action==='save-vehicle'){
+    var vRow = btn.closest('.settings-row');
+    var vDept = vRow ? vRow.querySelector('.v-dept') : null;
+    var vPlate = vRow ? vRow.querySelector('.v-plate') : null;
+    var vModel = vRow ? vRow.querySelector('.v-model') : null;
+    var dept = vDept ? vDept.value : '', plate = vPlate ? vPlate.value.trim() : '', model = vModel ? vModel.value.trim() : '';
+    if(!dept || !plate){ toast('부와 차량번호를 입력해 주세요.'); return; }
+    runSettingsAction(doEditVehicle(state, btn.dataset.id, {dept:dept, plate:plate, model:model}), '차량 정보를 수정했습니다');
+  }
+  else if(action==='delete-vehicle'){
+    runSettingsAction(doDeleteVehicle(state, btn.dataset.id), '차량을 삭제했습니다');
+  }
+  else if(action==='save-staff'){
+    var sRow = btn.closest('.settings-row');
+    var sDept = sRow ? sRow.querySelector('.s-dept') : null;
+    var sName = sRow ? sRow.querySelector('.s-name') : null;
+    var sExt = sRow ? sRow.querySelector('.s-ext') : null;
+    var dept5 = sDept ? sDept.value.trim() : '', name5 = sName ? sName.value.trim() : '', ext5 = sExt ? sExt.value.trim() : '';
+    runSettingsAction(doEditStaff(state, btn.dataset.id, {name:name5, ext:ext5, dept:dept5}), '명부 정보를 수정했습니다');
+  }
+  else if(action==='delete-staff'){
+    runSettingsAction(doDeleteStaff(state, btn.dataset.id), '명부에서 삭제했습니다');
+  }
+  else if(action==='submit-form'){
+    var f = document.getElementById(btn.dataset.form);
+    if(f) handleFormSubmit(f);
+  }
+  else if(action==='open-settings'){
+    try{ location.hash = 'settings'; }catch(e){}
+    paint();
+  }
+  else if(action==='close-settings'){
+    try{ location.hash = ''; }catch(e){}
+    paint();
+  }
+  else if(action==='csv-download'){
+    var dlKind = btn.dataset.kind;
+    var dlCsv = dlKind==='vehicles' ? buildVehiclesCsv(state) : buildStaffCsv(state);
+    var d0 = new Date(); var pad0 = function(n){ return String(n).padStart(2,'0'); };
+    var dlName = (dlKind==='vehicles'?'차량목록':'명부')+'_'+d0.getFullYear()+pad0(d0.getMonth()+1)+pad0(d0.getDate())+'.csv';
+    if(!downloadTextFile(dlName, dlCsv)) toast('파일 저장에 실패했어요.');
+  }
+  else if(action==='csv-template'){
+    var tpKind = btn.dataset.kind;
+    var tpCsv = tpKind==='vehicles' ? buildVehiclesTemplateCsv(state) : buildStaffTemplateCsv(state);
+    var tpName = (tpKind==='vehicles'?'차량목록_기본양식':'명부_기본양식')+'.csv';
+    if(!downloadTextFile(tpName, tpCsv)) toast('파일 저장에 실패했어요.');
+  }
+  else if(action==='csv-upload-trigger'){
+    var upKind = btn.dataset.kind;
+    var fileInput = document.getElementById('csvFile_'+upKind);
+    if(fileInput) fileInput.click();
+  }
+  else if(action==='confirm-bulk-import'){
+    closeDialog('bulkImportDialog');
+    if(!pendingBulkImport) return;
+    var pbi = pendingBulkImport; pendingBulkImport = null;
+    if(pbi.kind==='vehicles'){
+      runSettingsAction(doReplaceVehicles(state, pbi.rows), '차량 목록을 '+pbi.rows.length+'건으로 교체했습니다');
+    } else {
+      runSettingsAction(doReplaceStaffRoster(state, pbi.rows), '명부를 '+pbi.rows.length+'건으로 교체했습니다');
+    }
+  }
+  else if(action==='toggle-sort-dir'){
+    var sortKind = btn.dataset.kind;
+    var target = sortKind==='vehicles' ? vehicleSort : staffSort;
+    target.dir = target.dir==='asc' ? 'desc' : 'asc';
+    paint();
+  }
+}
+function showBulkDialog(message, isError){
+  var msgEl = document.getElementById('bulkImportMsg'); if(msgEl) msgEl.textContent = message;
+  var confirmBtn = document.getElementById('bulkImportConfirmBtn'); if(confirmBtn) confirmBtn.style.display = isError ? 'none' : '';
+  var d = document.getElementById('bulkImportDialog');
+  if(d && typeof d.showModal==='function') d.showModal();
+}
+function onDocChange(e){
+  var el = e.target;
+  if(!el || !el.classList) return;
+  if(el.classList.contains('csv-file-input')){ onFileChange(e); return; }
+  if(el.classList.contains('sort-field-select')){
+    var kind = el.dataset.kind;
+    if(kind==='vehicles') vehicleSort.field = el.value;
+    else if(kind==='staff') staffSort.field = el.value;
+    paint();
+  }
+}
+function onFileChange(e){
+  var input = e.target;
+  if(!input || !input.classList || !input.classList.contains('csv-file-input')) return;
+  var kind = input.dataset.kind;
+  var file = input.files && input.files[0];
+  if(!file) return;
+  var reader = new FileReader();
+  reader.onload = function(){
+    var text = String(reader.result||'');
+    input.value = '';
+    var rows;
+    try{ rows = parseCsv(text); }
+    catch(err){ showBulkDialog('파일을 읽는 중 문제가 발생했어요. CSV 형식이 맞는지 확인해 주세요.', true); return; }
+    var result = kind==='vehicles' ? parseVehiclesCsvRows(rows, state) : parseStaffCsvRows(rows, state);
+    if(result.error){ showBulkDialog(result.error, true); return; }
+    pendingBulkImport = {kind:kind, rows:result.rows};
+    var label = kind==='vehicles' ? '차량 목록' : '명부';
+    showBulkDialog('선택하신 파일 내용('+result.rows.length+'건)으로 '+label+' 전체를 교체합니다.\n기존에 등록되어 있던 내용은 사라집니다. 계속할까요?', false);
+  };
+  reader.onerror = function(){ input.value=''; toast('파일을 읽는 중 문제가 발생했어요.'); };
+  reader.readAsText(file, 'utf-8');
+}
+function handleFormSubmit(form){
+  if(form.id==='startForm'){
+    var chargerId = document.getElementById('startDialog').dataset.charger;
+    var name = form.name.value.trim(), dept = form.dept.value.trim(), plate = form.plate.value.trim();
+    var minutesRaw = form.minutes.value, minutes;
+    var maxAllowed = chargerMaxMinutes(chargerId);
+    if(minutesRaw==='custom'){
+      minutes = parseInt(form.minutesCustom.value,10);
+      if(!minutes || minutes<5 || minutes>maxAllowed){ document.getElementById('startError').textContent='충전 시간을 5분~'+fmtMinutes(maxAllowed)+' 사이로 입력해 주세요.'; return; }
+    } else {
+      minutes = parseInt(minutesRaw,10);
+    }
+    if(!name || !dept || !plate){ document.getElementById('startError').textContent='이름, 부, 차량번호를 모두 선택해 주세요.'; return; }
+    var conflict = findQueueConflict(chargerId, minutes);
+    if(conflict){
+      pendingStart = {chargerId:chargerId, data:{name:name,dept:dept,plate:plate,minutes:minutes}};
+      var msgEl = document.getElementById('overlapMsg');
+      if(msgEl) msgEl.textContent = conflict.name+'('+(conflict.dept||'')+(conflict.ext?(', '+conflict.ext):'')+') 님이 '+fmtClock(conflict.from)+'부터 이 충전기를 예약해 두었어요. 지금 입력하신 충전 시간(' + fmtMinutes(minutes) + ')대로 시작하면 예약 시각을 넘길 수 있어요.';
+      var od = document.getElementById('overlapDialog');
+      if(od && typeof od.showModal==='function') od.showModal();
+      return;
+    }
+    saveLastPick(dept, plate);
+    closeDialog('startDialog');
+    runAction(doStart(state, chargerId, {name:name,dept:dept,plate:plate,minutes:minutes}), name+' 님 충전을 시작했습니다');
+  } else if(form.id==='reserveForm'){
+    var chargerId2 = document.getElementById('reserveDialog').dataset.charger;
+    var name2 = form.name.value.trim(), dept2 = form.dept.value.trim(), plate2 = form.plate.value.trim(), time2 = form.time.value, minutes2 = parseInt(form.minutes.value,10);
+    if(!name2 || !dept2 || !plate2 || !time2){ document.getElementById('reserveError').textContent='이름, 부, 차량번호, 시작 시각을 모두 입력해 주세요.'; return; }
+    saveLastPick(dept2, plate2);
+    var from = timeInputToISO(time2); var to = new Date(new Date(from).getTime()+minutes2*60000).toISOString();
+    closeDialog('reserveDialog');
+    runAction(doReserve(state, chargerId2, {name:name2,dept:dept2,plate:plate2,from:from,to:to}), name2+' 님 예약이 추가되었습니다');
+  } else if(form.id==='maintForm'){
+    var chargerId3 = document.getElementById('maintDialog').dataset.charger;
+    var note = form.note.value.trim();
+    closeDialog('maintDialog');
+    runAction(doMaintOn(state, chargerId3, note), '점검중으로 표시했습니다');
+  } else if(form.id==='adminForm'){
+    var pin = form.pin.value.trim();
+    if(pin===ADMIN_PIN){
+      isAdmin = true;
+      try{ localStorage.setItem('ev_charger_admin','1'); }catch(e){}
+      closeDialog('adminDialog');
+      toast('관리자로 전환했어요.');
+      paint();
+    } else {
+      document.getElementById('adminError').textContent = '비밀번호가 올바르지 않습니다.';
+    }
+  } else if(form.id==='addChargerForm'){
+    var cname2 = form.name.value.trim(), ctype2 = form.type.value, cpower2 = form.power.value.trim();
+    if(!cname2){ toast('충전기 이름을 입력해 주세요.'); return; }
+    runSettingsAction(doAddCharger(state, {name:cname2, type:ctype2, power:cpower2}), cname2+' 충전기를 추가했습니다');
+  } else if(form.id==='addVehicleForm'){
+    var dept3 = form.dept.value.trim(), plate3 = form.plate.value.trim(), model3 = form.model.value.trim();
+    if(!dept3 || !plate3){ toast('부와 차량번호를 입력해 주세요.'); return; }
+    runSettingsAction(doAddVehicle(state, {dept:dept3, plate:plate3, model:model3}), plate3+' 차량을 추가했습니다');
+  } else if(form.id==='addStaffForm'){
+    var sdept4 = form.dept.value.trim(), sname4 = form.name.value.trim(), sext4 = form.ext.value.trim();
+    if(!sname4 || !sext4){ toast('이름과 구내번호를 입력해 주세요.'); return; }
+    runSettingsAction(doAddStaff(state, {name:sname4, ext:sext4, dept:sdept4}), sname4+' 님을 명부에 추가했습니다');
+  } else if(form.id==='addDeptForm'){
+    var dname = form.name.value.trim();
+    if(!dname){ toast('부 이름을 입력해 주세요.'); return; }
+    runSettingsAction(doAddDept(state, dname), '"'+dname+'" 부를 추가했습니다');
+  } else if(form.id==='staffFormatForm'){
+    var prefix5 = form.prefix.value.trim(), digits5 = form.digits.value;
+    runSettingsAction(doSaveStaffFormat(state, {prefix:prefix5, digits:digits5}), '명부 양식을 저장했습니다');
+  }
+}
+function onSubmit(e){
+  e.preventDefault();
+  handleFormSubmit(e.target);
+}
+
+function injectStyle(){ var st = document.createElement('style'); st.id='app-style'; st.textContent = CSS_TEXT; document.head.appendChild(st); }
+function injectChrome(){
+  var div = document.createElement('div'); div.innerHTML = CHROME_HTML; document.body.appendChild(div);
+  ['startDept','reserveDept'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML = deptOptionsHtml(state, ''); });
+  ['startPlate','reservePlate'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML = plateOptionsHtml(state, '',''); });
+  var sd = document.getElementById('startDept'); if(sd) sd.addEventListener('change', function(){ syncPlateOptions('startDept','startPlate'); });
+  var rd = document.getElementById('reserveDept'); if(rd) rd.addEventListener('change', function(){ syncPlateOptions('reserveDept','reservePlate'); });
+  var sm = document.getElementById('startMinutes'); if(sm) sm.addEventListener('change', toggleStartMinutesCustom);
+  setupNameAutocomplete('startName','startNameSuggest','startNameExt');
+  setupNameAutocomplete('reserveName','reserveNameSuggest','reserveNameExt');
+}
+function setupNameAutocomplete(inputId, suggestId, hintId){
+  var input = document.getElementById(inputId), panel = document.getElementById(suggestId);
+  if(!input || !panel) return;
+  input.addEventListener('input', function(){
+    updateNameExtHint(inputId, hintId);
+    renderNameSuggestions(inputId, suggestId);
+  });
+  input.addEventListener('focus', function(){ renderNameSuggestions(inputId, suggestId); });
+  input.addEventListener('blur', function(){ setTimeout(function(){ panel.hidden = true; }, 150); });
+  input.addEventListener('keydown', function(e){ if(e.key==='Escape') panel.hidden = true; });
+  panel.addEventListener('mousedown', function(e){ e.preventDefault(); }); // 입력칸 blur보다 클릭이 먼저 처리되게
+  panel.addEventListener('click', function(e){
+    var btn = e.target.closest('button[data-name]');
+    if(!btn) return;
+    input.value = btn.dataset.name;
+    panel.hidden = true;
+    updateNameExtHint(inputId, hintId);
+    input.focus();
+  });
+}
+function renderNameSuggestions(inputId, suggestId){
+  var input = document.getElementById(inputId), panel = document.getElementById(suggestId);
+  if(!input || !panel) return;
+  var matches = searchRoster(state.staffRoster, input.value, 6);
+  if(!matches.length){ panel.hidden = true; panel.innerHTML=''; return; }
+  panel.innerHTML = matches.map(function(r){
+    return '<button type="button" data-name="'+escapeHtml(r.name)+'"><span>'+escapeHtml(r.name)+'</span><span class="sug-ext">'+escapeHtml(extPhone(r.ext))+'</span></button>';
+  }).join('');
+  panel.hidden = false;
+}
+function updateNameExtHint(inputId, hintId){
+  var input = document.getElementById(inputId), hint = document.getElementById(hintId);
+  if(!input || !hint) return;
+  var ext = lookupExt(input.value);
+  hint.textContent = ext ? ('☎ '+ext) : '';
+}
+
+function freshDefaultState(){
+  return {
+    chargers:{fast1:{status:'idle',current:null,note:null,queue:[]},fast2:{status:'idle',current:null,note:null,queue:[]},slow1:{status:'idle',current:null,note:null,queue:[]}},
+    history:[],
+    depts: DEFAULT_DEPTS.slice(),
+    vehicles: DEFAULT_VEHICLES.map(function(v){ return {id:uid(), dept:v.dept, plate:v.plate, model:v.model}; }),
+    chargerMeta: JSON.parse(JSON.stringify(DEFAULT_CHARGER_META)),
+    chargerOrder: DEFAULT_CHARGER_ORDER.slice(),
+    staffRoster: defaultStaffRoster(),
+    staffPhoneFormat: {prefix:DEFAULT_PHONE_FORMAT.prefix, digits:DEFAULT_PHONE_FORMAT.digits}
+  };
+}
+function normalizeState(s){
+  if(!s.depts || !s.vehicles){
+    s.depts = DEFAULT_DEPTS.slice();
+    s.vehicles = DEFAULT_VEHICLES.map(function(v){ return {id:uid(), dept:v.dept, plate:v.plate, model:v.model}; });
+  }
+  if(!s.chargerMeta || !s.chargerOrder){
+    s.chargerMeta = JSON.parse(JSON.stringify(DEFAULT_CHARGER_META));
+    s.chargerOrder = DEFAULT_CHARGER_ORDER.slice();
+  }
+  if(!s.staffRoster){
+    s.staffRoster = defaultStaffRoster();
+  } else {
+    // v25 이전에 저장된 명부에는 '구분(과)' 정보가 없을 수 있어, 기본 명부 기준으로 보완해 넣는다.
+    var deptByName = {};
+    DEFAULT_STAFF_ROSTER.forEach(function(r){ deptByName[r[0]] = r[2]||''; });
+    s.staffRoster.forEach(function(r){ if(r.dept===undefined) r.dept = deptByName[r.name] || ''; });
+  }
+  if(!s.staffPhoneFormat){
+    s.staffPhoneFormat = {prefix:DEFAULT_PHONE_FORMAT.prefix, digits:DEFAULT_PHONE_FORMAT.digits};
+  }
+  return s;
+}
+var lastDiagHeartbeatAt = 0;
+async function pollStorage(){
+  if(!window.storage || anyDialogOpen()) return;
+  try{
+    var result = await window.storage.get(STORAGE_KEY, true);
+    storageOK = true;
+    if(result && result.value){
+      if(result.value !== lastSavedJson){
+        lastSavedJson = result.value;
+        state = normalizeState(JSON.parse(result.value));
+        paint();
+        diagLog('poll-change', '다른 화면(또는 다른 사람)의 변경 내용을 반영함');
+      }
+      // v47: 저장소를 정상적으로 읽어왔다는 것 자체가 확인됐으므로, 떠 있던 저장 문제 배지가 있다면 정리.
+      if(lastSyncOK === false){
+        lastSyncOK = true; lastSyncDetail = ''; lastSyncAt = Date.now(); updateSyncBadge();
+        diagLog('poll-recovered', '정상 읽기 확인, 경고 해제');
+      } else {
+        lastSyncAt = Date.now(); updateSyncBadge();
+        // v48: 매 4초마다 폴링이 도는데, 정상일 때마다 매번 기록하면 진단 로그(최근 150건)가
+        // 금방 다 차서 정작 필요한 "무슨 일이 있었는지"가 밀려날 수 있음. 그래서 평소엔 5분에
+        // 한 번씩만 "정상이었다"는 기준점을 남기고, 실제 이상 징후만 즉시 기록함.
+        if(Date.now() - lastDiagHeartbeatAt > 5*60*1000){
+          diagLog('poll-heartbeat', '정상 확인');
+          lastDiagHeartbeatAt = Date.now();
+        }
+      }
+    } else if(lastSavedJson){
+      // v47: 이전에 분명히 저장에 성공했다는 기록(lastSavedJson)이 있는데, 폴링으로 다시 읽어보니
+      // 저장소가 비어있음 - 저장했던 데이터가 실제로 사라졌다는 뜻이므로 배지로 알림.
+      lastSyncOK = false; lastSyncAt = Date.now();
+      lastSyncDetail = '저장했던 데이터가 저장소에서 사라짐(자동 확인 중 발견)';
+      updateSyncBadge();
+      diagLog('poll-data-missing', '이전에 저장 확인됐던 데이터가 폴링 중 사라진 것을 발견');
+    }
+  }catch(e){
+    // key not found yet, or transient error - ignore, next successful save will populate it
+    // (반복될 수 있어 60초에 한 번만 기록해 로그가 금방 차버리지 않게 함)
+    if(Date.now() - lastDiagHeartbeatAt > 60*1000 || lastDiagHeartbeatAt===0){
+      diagLog('poll-error', (e && (e.message||String(e)))||'');
+      lastDiagHeartbeatAt = Date.now();
+    }
+  }
+}
+async function init(){
+  try{ isAdmin = localStorage.getItem('ev_charger_admin')==='1'; }catch(e){ isAdmin = false; }
+  injectStyle(); injectChrome();
+  var app = document.getElementById('app');
+  if(app) app.innerHTML = '<div style="padding:40px;text-align:center;color:var(--ink-muted);">불러오는 중...</div>';
+
+  if(window.storage){
+    // v46: 예전 코드는 window.storage.get()이 어떤 이유로든 실패하면(일시적 네트워크 오류,
+    // 저장 직후 읽기 시점의 지연 등) 곧바로 "첫 실행"이라고 단정하고 빈 기본값을 만들어 그 자리에서
+    // 다시 저장해버렸다 - 방금 충전을 시작해 저장된 실제 데이터가 있어도, 새로고침 시점에 읽기가
+    // 한 번만 삐끗하면 그 실제 데이터를 빈 상태로 덮어써서 영구히 날려버리는 구조적 문제였다.
+    // v47: 그런데 v46 배포 후에도 "충전 시작 → 같은 링크를 새 탭으로 열어도 곧바로 빈 화면"이
+    // 재현됨(에러 안내조차 없이) — 이는 get()이 예외를 던지는 게 아니라 "정상 응답 + 값 없음"을
+    // 매번 일관되게 반환하고 있을 가능성을 시사함. v46은 이 "정상 응답 + 값 없음"을 재시도 없이
+    // 곧바로 "진짜 첫 실행"으로 단정해 버렸는데, 이것도 성급한 판단일 수 있다 — 그래서 이제는
+    // 예외로 인한 실패든 "값 없음" 응답이든 구분하지 않고 최대 3번까지 재시도해서 일시적인 지연을
+    // 흡수하고, 그래도 3번 다 데이터를 못 찾으면 그때 가서야 "정말 없는 것"으로 보고 기본값을
+    // 시딩하되 — 이번에는 그 사실을 배지로 눈에 띄게 남겨서, 만약 이게 반복적으로 잘못된 판단이라면
+    // (즉 데이터가 실제로 있는데도 계속 못 찾는 근본적인 문제가 있다면) 사용자가 바로 알아챌 수 있게 함.
+    diagLog('init-start', '화면을 새로 열거나 새로고침함');
+    var loadedOK = false, lastErr = null, emptyCount = 0;
+    for(var loadAttempt=0; loadAttempt<3 && !loadedOK; loadAttempt++){
+      try{
+        var result = await window.storage.get(STORAGE_KEY, true);
+        if(result && result.value){
+          state = normalizeState(JSON.parse(result.value));
+          lastSavedJson = result.value;
+          storageOK = true;
+          loadedOK = true;
+          diagLog('init-load-ok', (loadAttempt+1)+'회차 시도에서 기존 데이터 정상 로드(크기 '+result.value.length+'자)');
+        } else {
+          emptyCount++;
+          diagLog('init-load-empty', (loadAttempt+1)+'회차 시도: 응답은 정상이나 값 없음');
+          if(loadAttempt<2) await new Promise(function(r){ setTimeout(r, 400*(loadAttempt+1)); });
+        }
+      }catch(e){
+        lastErr = e;
+        diagLog('init-load-error', (loadAttempt+1)+'회차 시도: '+((e && (e.message||String(e)))||''));
+        if(loadAttempt<2) await new Promise(function(r){ setTimeout(r, 400*(loadAttempt+1)); });
+      }
+    }
+    if(loadedOK){
+      lastSyncOK = true; lastSyncAt = Date.now(); lastSyncDetail = '';
+    }
+    if(!loadedOK){
+      if(emptyCount>=3){
+        // 3번 모두 "정상 응답인데 값 없음" - 진짜 첫 실행으로 보고 기본값을 시딩한다.
+        // 다만 저장했던 데이터가 원인 불명으로 사라지는 사례가 있었으므로, 혹시 몰라 배지로도 남겨서
+        // "어, 방금까지 있던 데이터가 없어졌네?" 싶은 순간 바로 확인할 수 있게 함.
+        state = freshDefaultState();
+        var seedJson = JSON.stringify(state);
+        try{ await window.storage.set(STORAGE_KEY, seedJson, true); lastSavedJson = seedJson; storageOK = true; }
+        catch(e2){ storageOK = false; }
+        lastSyncOK = false; lastSyncAt = Date.now();
+        lastSyncDetail = '저장소에서 기존 데이터를 찾지 못해 새로 초기화했습니다';
+        updateSyncBadge();
+        diagLog('init-seed-fresh', '3회 모두 빈 값 확인 - 새 기본값으로 초기화하고 저장 시도함');
+      } else {
+        // 예외(오류)와 "값 없음"이 섞여 나왔거나 예외만 발생한 경우 - 원인이 불확실하므로
+        // 저장소는 절대 건드리지 않는다. 화면에는 임시로 빈 상태만 보여주고, 4초마다 도는
+        // pollStorage()가 다음 성공적인 읽기에서 실제 데이터를 자동으로 되찾아온다.
+        state = freshDefaultState();
+        storageOK = false;
+        lastSyncOK = false; lastSyncAt = Date.now();
+        lastSyncDetail = (lastErr && (lastErr.message || String(lastErr))) || '데이터를 불러오지 못함';
+        updateSyncBadge();
+        diagLog('init-load-fail-ambiguous', '읽기 실패/불확실 - 저장소는 건드리지 않고 자동 재확인 대기');
+        toast('데이터를 불러오지 못했습니다. 잠시 후 자동으로 다시 시도합니다.');
+      }
+    }
+  } else {
+    state = freshDefaultState();
+    storageOK = false;
+  }
+
+  paint();
+  document.body.addEventListener('click', onClick);
+  document.body.addEventListener('submit', onSubmit); // 일부 환경에서 Enter키로 자연스럽게 폼 submit이 발생하는 경우를 위한 보조 처리
+  document.body.addEventListener('change', onDocChange);
+  document.body.addEventListener('keydown', function(e){
+    if(e.key!=='Enter') return;
+    var tag = e.target.tagName;
+    if(tag!=='INPUT') return; // select/textarea 등에서는 Enter를 그대로 둠
+    var form = e.target.form;
+    if(!form) return;
+    e.preventDefault();
+    handleFormSubmit(form);
+  });
+  window.addEventListener('hashchange', paint);
+  setInterval(pollStorage, 4000);
+}
+
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', init); else init();
+})();
+</script>
+</body>
+</html>
