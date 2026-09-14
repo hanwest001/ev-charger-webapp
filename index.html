@@ -176,7 +176,10 @@ var CSS_TEXT =":root{--bg:#F4F7FC;--surface:#FFFFFF;--surface-2:#EDF1F7;--surfac
 +".chips{display:flex;gap:8px;flex-wrap:wrap;}"
 +".chip{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:10px 18px 10px 10px;box-shadow:var(--shadow);}"
 +".chip-icon{width:38px;height:38px;border-radius:11px;background:var(--chip-icon-bg);color:var(--chip-icon-ink);display:flex;align-items:center;justify-content:center;flex:none;}"
-+".chip-icon svg{width:19px;height:19px;}"
+/* 2026-09-14: 아이콘이 상자 중앙이 아니라 좌측 상단으로 쏠려 보인다는 제보 -
+   인라인 svg는 기본적으로 아래에 몇 px의 여백(baseline gap)이 생겨서, flex로 중앙
+   정렬해도 살짝 위/왼쪽으로 치우쳐 보일 수 있음. display:block으로 그 여백을 없앰. */
++".chip-icon svg{width:19px;height:19px;display:block;}"
 +".chip-text{display:flex;flex-direction:column;line-height:1.25;}"
 +".chip b{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:19px;}.chip span{font-size:13.5px;color:var(--ink-muted);}"
 +"@media (max-width:480px){"
@@ -194,6 +197,12 @@ var CSS_TEXT =":root{--bg:#F4F7FC;--surface:#FFFFFF;--surface-2:#EDF1F7;--surfac
 +".section-title-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin:36px 0 12px;}.section-title-row .section-title{margin:0;}"
 +".bottom-actions{display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;margin:40px 0 8px;padding-top:24px;border-top:1px solid var(--border);}"
 +".icon-btn{gap:7px;}.icon-btn svg{display:block;flex:none;}"
+/* 2026-09-14: "기본정보 설정"을 화면 하단 버튼에서 우측 상단 톱니바퀴 아이콘으로 이동.
+   .topbar가 이미 position:sticky라 위치 기준(positioning context)이 되므로 절대 위치로 배치. */
++".gear-fab{position:absolute;top:20px;right:20px;width:38px;height:38px;border-radius:11px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow);display:flex;align-items:center;justify-content:center;color:var(--ink-muted);cursor:pointer;padding:0;}"
++".gear-fab svg{width:19px;height:19px;display:block;}"
++".gear-fab:hover{background:var(--surface-hover);color:var(--ink);}"
++"@media(max-width:480px){.gear-fab{width:32px;height:32px;top:14px;right:14px;}.gear-fab svg{width:16px;height:16px;}}"
 +".cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:18px;}"
 +".card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;}"
 +".card-accent{height:4px;width:100%;}.card-accent.idle{background:var(--idle);}.card-accent.charging{background:var(--charging);}.card-accent.maintenance{background:var(--maint);}"
@@ -275,6 +284,11 @@ var CSS_TEXT =":root{--bg:#F4F7FC;--surface:#FFFFFF;--surface-2:#EDF1F7;--surfac
 +".sync-status.warn{background:#fff4ea;border:1px solid #f0ad5c;color:#7a4a12;border-radius:10px;padding:9px 14px;margin:14px auto 0;font-size:12.5px;}"
 +"@media (prefers-color-scheme: dark){.sync-status.warn{background:#3a2a12;border-color:#8a5a1f;color:#ffcf8a;}}"
 +":root[data-theme='dark'] .sync-status.warn{background:#3a2a12;border-color:#8a5a1f;color:#ffcf8a;}"
+/* 2026-09-14: 요청에 따라 "마지막 저장 확인" 문구를 헤더 아래 별도 줄 대신
+   "충전기 현황" 제목 옆에 괄호로 작게 붙임. 저장 문제(warn) 상태일 때는 상자 스타일을
+   빼고 굵은 주황색 글씨로만 눈에 띄게 함(제목 줄 안에서 큰 박스가 어색하지 않도록). */
++".section-title .sync-status{display:inline;max-width:none;margin:0 0 0 4px;padding:0;font-size:12px;font-weight:400;color:var(--ink-faint);}"
++".section-title .sync-status.warn{background:none;border:none;border-radius:0;padding:0;margin:0 0 0 4px;color:var(--reserved);font-weight:700;}"
 +".diag-log-link{background:none;border:none;padding:0;margin:0;color:inherit;text-decoration:underline;cursor:pointer;font:inherit;font-size:11.5px;}"
 +".diag-log-list{max-height:52vh;overflow-y:auto;border:1px solid var(--border);border-radius:8px;font-size:12px;}"
 +".diag-log-row{display:flex;gap:8px;padding:6px 10px;border-bottom:1px solid var(--border);}"
@@ -364,6 +378,10 @@ var CHROME_HTML = ''
 + '<h4>⚠ 예약된 시간과 겹쳐요</h4><div class="modal-sub" id="overlapMsg"></div>'
 + '<div class="modal-actions"><button type="button" class="btn" data-action="close-dialog" data-target="overlapDialog">취소하고 시간 조정</button><button type="button" class="btn primary" data-action="confirm-overlap-start">그래도 시작</button></div>'
 + '</div></dialog>'
++ '<dialog id="dupPlateDialog"><div class="modal-inner">'
++ '<h4>⚠ 이미 사용 중인 차량번호예요</h4><div class="modal-sub" id="dupPlateMsg"></div>'
++ '<div class="modal-actions"><button type="button" class="btn primary" data-action="close-dialog" data-target="dupPlateDialog">확인</button></div>'
++ '</div></dialog>'
 + '<dialog id="adminDialog"><form class="modal-inner" id="adminForm" novalidate>'
 + '<h4>관리자 로그인</h4><div class="modal-sub">전체 이용 기록 열람과 엑셀 내보내기는 관리자만 할 수 있어요.</div>'
 + '<div class="field"><label for="adminPin">비밀번호</label><input id="adminPin" name="pin" type="password" inputmode="numeric" autocomplete="off" maxlength="20"></div>'
@@ -403,6 +421,32 @@ function toggleStartMinutesCustom(){
   wrap.hidden = (sel.value !== 'custom');
 }
 function statusLabel(st){ return st==='idle'?'비어있음':(st==='charging'?'충전중':'점검중'); }
+
+// 2026-09-14: 같은 차량번호가 이미 다른 충전기에서 충전 중인데, 또 다른 충전기에서
+// 그 차량으로 충전 시작/예약을 시도하는 걸 막기 위한 확인. excludeChargerId는 지금
+// 시작/예약하려는 그 충전기(자기 자신은 검사 대상에서 제외).
+function findActivePlateElsewhere(excludeChargerId, plate){
+  if(!plate) return null;
+  var order = state.chargerOrder||[];
+  for(var i=0;i<order.length;i++){
+    var id = order[i];
+    if(id===excludeChargerId) continue;
+    var c = state.chargers[id];
+    if(c && c.status==='charging' && c.current && c.current.plate===plate){
+      var meta = state.chargerMeta[id];
+      return {id:id, name: meta?meta.name:id, current:c.current};
+    }
+  }
+  return null;
+}
+function showDupPlateDialog(plate, dup, context){
+  var msgEl = document.getElementById('dupPlateMsg');
+  if(msgEl){
+    msgEl.textContent = '차량번호 '+plate+'번은 지금 "'+dup.name+'"에서 '+(dup.current.name?(dup.current.name+' 님이 '):'')+'충전 중이에요. 한 차량이 동시에 두 곳에서 '+(context==='reserve'?'예약될':'충전될')+' 수는 없어요.';
+  }
+  var dd = document.getElementById('dupPlateDialog');
+  if(dd && typeof dd.showModal==='function') dd.showModal();
+}
 
 var ACTION_LABEL = {start:'충전 시작', end:'충전 종료', reserve:'예약', cancel_reserve:'예약 취소', maintenance_on:'점검 시작', maintenance_off:'점검 해제'};
 
@@ -682,22 +726,21 @@ function renderApp(state, writable, sharedMode, hasDownloads, isAdmin){
   var fastCount = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='fast'; }).length;
   var slowCount = chargerOrder.filter(function(id){ return state.chargerMeta[id].type==='slow'; }).length;
   var dashboardSubtitle = '급속 '+fastCount+'대 · 완속 '+slowCount+'대 실시간 이용 현황';
-  var settingsLink = '<button type="button" class="btn icon-btn" data-action="open-settings" title="충전기·부 이름·차량 목록을 관리합니다. (관리자 전용)">'+SETTINGS_ICON_SVG+'<span>기본정보 설정</span></button>';
   var adminBtn = isAdmin
     ? '<button class="btn ghost small" data-action="admin-logout">관리자 로그아웃</button>'
-    : '<button class="btn icon-btn" data-action="open-admin" title="전체 이용 기록 열람과 엑셀 내보내기는 관리자만 할 수 있어요.">'+LOCK_ICON_SVG+'<span>관리자 로그인</span></button>';
-  var bottomActions = '<div class="bottom-actions">'+settingsLink+adminBtn+'</div>';
+    : '';
+  var bottomActions = adminBtn ? ('<div class="bottom-actions">'+adminBtn+'</div>') : '';
   var historyControls = (isAdmin && hasDownloads)
     ? '<button class="btn icon-btn" data-action="export-history" title="저장된 전체 이용 기록을 엑셀(CSV) 파일로 내려받습니다.">'+EXPORT_ICON_SVG+'<span>엑셀로 내보내기</span></button>'
     : '';
   return '<div class="topbar"><div class="topbar-inner">'
+    +'<button type="button" class="gear-fab" data-action="open-settings" title="설정 (관리자 전용)">'+SETTINGS_ICON_SVG+'</button>'
     +'<div class="brand-row"><div class="brand-logo">'+DROP_ICON_SVG+'</div><div><h1>한강서부사업단 EV 충전기 현황</h1><div class="subtitle">'+dashboardSubtitle+'</div></div></div>'
     +'<div class="chips">'+renderSummary(state)+'</div></div></div>'
-    +'<div class="sync-status" id="syncBadge"></div>'
     +'<div class="wrap">'
     +(writable?'':'<div class="readonly-banner">이 화면은 보기 전용입니다. 변경사항이 저장되지 않아요.</div>')
     +(sharedMode?'':'<div class="readonly-banner">⚠ 공유 저장이 연결되지 않아 이 화면에서만 임시로 표시됩니다. 다른 사람에게는 보이지 않아요.</div>')
-    +'<div class="section-title">'+sectionTitleHtml('충전기 현황')+'</div><div class="cards-grid">'+cards+'</div>'
+    +'<div class="section-title">'+sectionTitleHtml('충전기 현황')+' <span class="sync-status" id="syncBadge"></span></div><div class="cards-grid">'+cards+'</div>'
     +'<div class="section-title-row"><div class="section-title">'+sectionTitleHtml('이용 통계 (최근 1개월)')+'</div>'+historyControls+'</div>'
     +renderStatsSection(state)
     +(isAdmin ? ('<div class="section-title">'+sectionTitleHtml('최근 이용내역 (최근 '+RECENT_HISTORY_COUNT+'건, 관리자 전용)')+'</div>'+renderRecentHistory(state)) : '')
@@ -1218,10 +1261,10 @@ function updateSyncBadge(){
   if(lastSyncOK === false){
     el.classList.add('warn');
     var t = lastSyncAt ? fmtClock(new Date(lastSyncAt).toISOString()) : '';
-    el.textContent = '⚠ 방금 저장(또는 확인)한 내용이 실제로 반영됐는지 확인하지 못했습니다' + (t?(' ('+t+')'):'') + (lastSyncDetail?(' — '+lastSyncDetail):'') + '. 아래 "진단 로그 보기"를 눌러 화면을 캡처해 알려주시면 원인 파악에 큰 도움이 됩니다.';
+    el.textContent = '(⚠ 저장 확인 실패' + (t?(' '+t):'') + (lastSyncDetail?(' — '+lastSyncDetail):'') + ' · 아래 "진단 로그 보기"를 참고해주세요)';
   } else {
     el.classList.remove('warn');
-    el.textContent = lastSyncAt ? ('마지막 저장 확인: '+fmtClock(new Date(lastSyncAt).toISOString())+' · 정상') : '저장 상태 확인 중...';
+    el.textContent = lastSyncAt ? ('(마지막 저장 확인: '+fmtClock(new Date(lastSyncAt).toISOString())+' · 정상)') : '(저장 상태 확인 중...)';
   }
 }
 // v48: window.storage(공유 저장소)와는 별개로, 이 기기(브라우저)에만 남는 진단 기록.
@@ -1577,8 +1620,12 @@ function onClick(e){
     if(f) handleFormSubmit(f);
   }
   else if(action==='open-settings'){
-    try{ location.hash = 'settings'; }catch(e){}
-    paint();
+    if(!isAdmin){
+      openDialog('adminDialog', null);
+    } else {
+      try{ location.hash = 'settings'; }catch(e){}
+      paint();
+    }
   }
   else if(action==='close-settings'){
     try{ location.hash = ''; }catch(e){}
@@ -1671,6 +1718,8 @@ function handleFormSubmit(form){
       minutes = parseInt(minutesRaw,10);
     }
     if(!name || !dept || !plate){ document.getElementById('startError').textContent='이름, 부, 차량번호를 모두 선택해 주세요.'; return; }
+    var dupStart = findActivePlateElsewhere(chargerId, plate);
+    if(dupStart){ showDupPlateDialog(plate, dupStart, 'start'); return; }
     var conflict = findQueueConflict(chargerId, minutes);
     if(conflict){
       pendingStart = {chargerId:chargerId, data:{name:name,dept:dept,plate:plate,minutes:minutes}};
@@ -1687,6 +1736,8 @@ function handleFormSubmit(form){
     var chargerId2 = document.getElementById('reserveDialog').dataset.charger;
     var name2 = form.name.value.trim(), dept2 = form.dept.value.trim(), plate2 = form.plate.value.trim(), time2 = form.time.value, minutes2 = parseInt(form.minutes.value,10);
     if(!name2 || !dept2 || !plate2 || !time2){ document.getElementById('reserveError').textContent='이름, 부, 차량번호, 시작 시각을 모두 입력해 주세요.'; return; }
+    var dupReserve = findActivePlateElsewhere(chargerId2, plate2);
+    if(dupReserve){ showDupPlateDialog(plate2, dupReserve, 'reserve'); return; }
     saveLastPick(dept2, plate2);
     var from = timeInputToISO(time2); var to = new Date(new Date(from).getTime()+minutes2*60000).toISOString();
     closeDialog('reserveDialog');
@@ -1703,6 +1754,7 @@ function handleFormSubmit(form){
       try{ localStorage.setItem('ev_charger_admin','1'); }catch(e){}
       closeDialog('adminDialog');
       toast('관리자로 전환했어요.');
+      try{ location.hash = 'settings'; }catch(e){}
       paint();
     } else {
       document.getElementById('adminError').textContent = '비밀번호가 올바르지 않습니다.';
