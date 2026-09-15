@@ -234,11 +234,20 @@ var CSS_TEXT =":root{--bg:#F4F7FC;--surface:#FFFFFF;--surface-2:#EDF1F7;--surfac
 +".gear-fab:hover{background:var(--surface-hover);color:var(--ink);}"
 +"@media(max-width:480px){.gear-fab{width:32px;height:32px;top:14px;right:14px;}.gear-fab svg{width:16px;height:16px;}}"
 /* 2026-09-14: '충전기 현황' 제목 아래, 카드 목록 위에 급속/완속 평균 완충시간을 한 줄로 표시. */
-+".avg-charge-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;}"
-+".avg-charge-item{display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:6px 12px;font-size:12.5px;color:var(--ink-muted);}"
-+".avg-charge-item svg{flex:none;color:var(--accent);}"
-+".avg-charge-item b{color:var(--ink);font-weight:700;}"
-+".avg-charge-hint{font-size:11px;color:var(--ink-faint);margin-top:6px;}"
+/* 2026-09-16: 급속/완속 평균 완충 칩이 모바일(가로 약 393px 기준)에서도 줄바꿈 없이 한 줄에
+   들어오도록, 두 칩이 flex:1 1 0으로 폭을 절반씩 나눠 갖고(줄바꿈 자체를 막음: nowrap),
+   글자가 넘치면 잘리지 않고 말줄임(ellipsis)으로 깔끔하게 처리되게 함(요청사항). */
++".avg-charge-row{display:flex;gap:6px;flex-wrap:nowrap;margin-top:8px;}"
++".avg-charge-item{display:flex;align-items:center;gap:5px;background:var(--surface-2);border:1px solid var(--border);border-radius:999px;padding:6px 10px;font-size:11.5px;color:var(--ink-muted);flex:1 1 0;min-width:0;}"
++".avg-charge-item svg{flex:none;width:13px;height:13px;color:var(--accent);}"
++".avg-charge-item b{color:var(--ink);font-weight:700;flex:none;}"
++".avg-charge-val{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}"
+/* 2026-09-16: 안내문구를 "핵심 정보(진하게, 큰 글자)" + "부연 설명(연하게, 작은 글자)" 두 줄로
+   나누고 옅은 배경 박스로 감싸서 가시성을 높임(요청사항 - 내용·폭을 깔끔하게 정리). */
++".avg-charge-hint{margin-top:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:10px;}"
++".avg-charge-hint-main{font-size:12.5px;color:var(--ink);line-height:1.5;}"
++".avg-charge-hint-main b{font-weight:700;margin-right:2px;}"
++".avg-charge-hint-sub{font-size:11px;color:var(--ink-faint);line-height:1.5;margin-top:2px;}"
 +".cards-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-top:18px;}"
 +".card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;}"
 +".card-accent{height:4px;width:100%;}.card-accent.idle{background:var(--idle);}.card-accent.charging{background:var(--charging);}.card-accent.maintenance{background:var(--maint);}"
@@ -836,14 +845,27 @@ function renderStatsSection(state){
 // 한 줄로 깔끔하게 보여줌(요청사항). 완료된 충전 기록이 없는 타입은 "데이터 없음"으로 표시.
 function renderAvgDurationStrip(state){
   var avg = computeAvgDurationByType(state, STATS_DAYS);
+  // 2026-09-16: 모바일(가로 약 393px 기준) 폭에서도 급속/완속 두 항목이 줄바꿈 없이 한 줄에
+  // 들어오도록: (1) 각 항목을 flex:1 1 0으로 절반씩 나눠 갖게 하고, (2) 상대적으로 덜 중요한
+  // "· N건" 건수는 화면 표시 문구에서 빼고 title(길게 누르면/마우스 올리면 보이는 설명)로만
+  // 남김 - "평균 1시간 30분 · 12건"까지 다 넣으면 393px에서 두 항목 다 넣기엔 항상 빠듯해서
+  // 계속 말줄임(...)으로 잘렸었음(요청사항: 393px까지 한 줄로 깔끔하게). 그래도 안 들어갈 만큼
+  // 극단적으로 좁은 화면에서는 값 부분이 자연스럽게 말줄임 처리됨(안전장치).
   function part(icon, label, info){
     var text = info.count>0 ? fmtMinutes(info.avgMinutes) : '데이터 없음';
-    return '<span class="avg-charge-item">'+icon+'<b>'+label+'</b><span>평균 완충 '+text+(info.count>0?(' · '+info.count+'건'):'')+'</span></span>';
+    var titleAttr = info.count>0 ? (' title="최근 '+STATS_DAYS+'일 · '+info.count+'건 평균"') : '';
+    return '<span class="avg-charge-item">'+icon+'<b>'+label+'</b><span class="avg-charge-val"'+titleAttr+'>평균 '+text+'</span></span>';
   }
   // 2026-09-15: 실제 측정된 "평균 완충 시간"(위 avg-charge-item, 지난 이용 기록 기준)과 헷갈리지
   // 않도록, 등록된 차량(EV6·아이오닉5 롱레인지, 배터리 약 77.4kWh) 기준의 "예상" 완충 시간을
-  // 별도 안내문구로 작게 덧붙임(요청사항). 배터리 상태·외기온에 따라 실제와 차이가 날 수 있음.
-  var hint = '<div class="avg-charge-hint">참고 · 등록 차량(EV6·아이오닉5 롱레인지) 기준 예상 완충 시간: 급속(50kW) 약 1~1.5시간, 완속(7kW) 약 9~11시간 (배터리 상태·외기온에 따라 달라질 수 있어요)</div>';
+  // 별도 안내문구로 덧붙임(요청사항). 배터리 상태·외기온에 따라 실제와 차이가 날 수 있음.
+  // 2026-09-16: 한 줄로 빽빽하게 이어붙인 문구가 잘 안 읽힌다는 요청으로, 핵심 정보(예상 완충
+  // 시간·급속/완속 수치)를 진하게 강조하고, 부연 설명(차종 기준·오차 안내)은 연한 별도 줄로
+  // 분리해 가독성을 높임. 옅은 배경 박스로 감싸 눈에 더 잘 띄게 함.
+  var hint = '<div class="avg-charge-hint">'
+    +'<div class="avg-charge-hint-main"><b>예상 완충 시간</b> 급속(50kW) 약 1~1.5시간 · 완속(7kW) 약 9~11시간</div>'
+    +'<div class="avg-charge-hint-sub">등록 차량(EV6·아이오닉5 롱레인지) 기준 · 배터리 상태·외기온에 따라 달라질 수 있어요</div>'
+    +'</div>';
   return '<div class="avg-charge-row">'+part(BOLT_ICON_SVG,'급속',avg.fast)+part(PLUG_ICON_SVG,'완속',avg.slow)+'</div>'+hint;
 }
 var EXPORT_ICON_SVG = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/></svg>';
