@@ -2019,14 +2019,14 @@ function injectChrome(){
   var sd = document.getElementById('startDept'); if(sd) sd.addEventListener('change', function(){ syncPlateOptions('startDept','startPlate'); });
   var rd = document.getElementById('reserveDept'); if(rd) rd.addEventListener('change', function(){ syncPlateOptions('reserveDept','reservePlate'); });
   var sm = document.getElementById('startMinutes'); if(sm) sm.addEventListener('change', toggleStartMinutesCustom);
-  setupNameAutocomplete('startName','startNameSuggest','startNameExt');
-  setupNameAutocomplete('reserveName','reserveNameSuggest','reserveNameExt');
+  setupNameAutocomplete('startName','startNameSuggest','startNameExt','startDept','startPlate');
+  setupNameAutocomplete('reserveName','reserveNameSuggest','reserveNameExt','reserveDept','reservePlate');
 }
-function setupNameAutocomplete(inputId, suggestId, hintId){
+function setupNameAutocomplete(inputId, suggestId, hintId, deptSelectId, plateSelectId){
   var input = document.getElementById(inputId), panel = document.getElementById(suggestId);
   if(!input || !panel) return;
   input.addEventListener('input', function(){
-    updateNameExtHint(inputId, hintId);
+    applyRosterMatch(inputId, hintId, deptSelectId, plateSelectId);
     renderNameSuggestions(inputId, suggestId);
   });
   input.addEventListener('focus', function(){ renderNameSuggestions(inputId, suggestId); });
@@ -2038,7 +2038,7 @@ function setupNameAutocomplete(inputId, suggestId, hintId){
     if(!btn) return;
     input.value = btn.dataset.name;
     panel.hidden = true;
-    updateNameExtHint(inputId, hintId);
+    applyRosterMatch(inputId, hintId, deptSelectId, plateSelectId);
     input.focus();
   });
 }
@@ -2057,6 +2057,26 @@ function updateNameExtHint(inputId, hintId){
   if(!input || !hint) return;
   var ext = lookupExt(input.value);
   hint.textContent = ext ? ('☎ '+ext) : '';
+}
+// 2026-09-15: 이름칸에 명부와 정확히 일치하는 이름을 입력하면 그 사람의 부를 부 선택칸에
+// 자동으로 채워주되(추천 성격), 이미 관리자가 다른 부를 직접 선택해 둔 경우는 덮어쓰지 않고,
+// 자동으로 채워진 뒤에도 언제든 수동으로 바꿀 수 있게 select는 그대로 둔다(비활성화하지 않음).
+function applyRosterMatch(inputId, hintId, deptSelectId, plateSelectId){
+  updateNameExtHint(inputId, hintId);
+  if(!deptSelectId) return;
+  var deptSel = document.getElementById(deptSelectId);
+  if(!deptSel) return;
+  var input = document.getElementById(inputId);
+  var name = input ? input.value.trim() : '';
+  if(!name) return;
+  var roster = (state && state.staffRoster) || [];
+  var hit = roster.filter(function(r){ return r.name===name; })[0];
+  if(!hit || !hit.dept) return;
+  if(deptSel.value===hit.dept) return; // 이미 같은 값이면 굳이 다시 안 채움(플레이트 목록 리셋 방지)
+  var hasOption = Array.prototype.some.call(deptSel.options, function(o){ return o.value===hit.dept; });
+  if(!hasOption) return;
+  deptSel.value = hit.dept;
+  if(plateSelectId) syncPlateOptions(deptSelectId, plateSelectId);
 }
 
 function freshDefaultState(){
